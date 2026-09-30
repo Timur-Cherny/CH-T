@@ -1,0 +1,30 @@
+{
+  "_comment": "Site config. Copy to ~/.claude/harness.config.json and edit, or point CLAUDE_HARNESS_CONFIG at it. No file — generic defaults: main is protected, no company host is guarded, nothing is watched, no prod relation counts as configuration, the work-doc reminder is silent. A file that exists and does not read (broken JSON, a field of the wrong shape) makes pre-push-guard and owner-actions answer unknown/deny until it is fixed. Contract: src/config.ts.",
+
+  "_protectedBranches": "Branches a feature branch may not push or open an MR into; only release/* and hotfix/* reach them. Default [\"main\"]. PREPUSH_PROTECTED / OWNER_GATE_PROTECTED (comma list) outrank it for one run.",
+  "protectedBranches": ["main"],
+
+  "_integrationBranches": "Branches feature MRs target — the live lines next to the protected ones.",
+  "integrationBranches": ["dev"],
+
+  "_ownerHosts": "Hosts of the company git whose tags, merges and protected branches only the owner touches (owner-actions). Default [] — no host is guarded. OWNER_GATE_HOSTS outranks it.",
+  "ownerHosts": ["git.example.com"],
+
+  "_shellPaths": "A file under $HOME your shell sources for path variables; commands like `git -C $APP_ENGINE push` are resolved with it. Names must be plain shell names.",
+  "shellPaths": { "file": ".config/app-paths.sh", "vars": ["APP_VAULT", "APP_ENGINE", "APP_FE"] },
+
+  "_freshness": "git-freshness: the vault variable, the repository variables whose HEAD shifts are reported, a tracker file inside the vault whose edits are reported, and sync — local branches fast-forwarded to <remote>/<branch> after that remote fetches (only when no worktree holds them; ahead or diverged ones are left and reported). No sync block — no ref is moved.",
+  "freshness": { "vaultVar": "APP_VAULT", "repoVars": ["APP_ENGINE", "APP_FE"], "trackerRel": "work-docs/TRACKER.md", "sync": { "remote": "origin", "branches": ["main", "dev"] } },
+
+  "_dataBoundary": "Prod relations whose rows describe the system (configuration), not business data. Default [] — every prod row is a business row.",
+  "dataBoundary": { "configTables": ["app_settings", "feature_flags", "countries"] },
+
+  "_vaultRel": "Vault path relative to $HOME when the vault variable is unset.",
+  "vaultRel": "Documents/vault",
+
+  "_workDocs": "Reminder to record an explanation as a work-doc: cwd — regex over the repository path, text — the whole reminder. No block — the reminder is silent.",
+  "workDocs": {
+    "cwd": "(my-service|my-frontend)",
+    "text": "[work-docs reminder] This looks like important system behaviour. If it is an explanation grounded in code, record it as a work-doc, not only in chat."
+  }
+}

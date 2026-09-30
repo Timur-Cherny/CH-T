@@ -1,0 +1,9 @@
+{
+  "typescript": {
+    "version": "5.9.3",
+    "tarball": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+    "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+    "entry": "package/lib/typescript.js",
+    "entry_sha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675"
+  }
+}

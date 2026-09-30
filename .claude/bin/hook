@@ -1,0 +1,12 @@
+#!/bin/sh
+# Repo-level вход харнесса (zero-install для клона вольта). Событие отдаётся user-level харнессу, только если
+# ~/.claude/settings.json привязывает к harness/bin/hook именно это событие: тогда роутер не запускается дважды
+# (дубль на tool-событиях и так гасит claim по tool_use_id). Одного симлинка ~/.claude/harness для этого мало —
+# его ставит install.sh, в том числе авто-установка Node на старте облачной сессии, а привязку не ставит никто:
+# по одному симлинку шим выходил, и барьер молчал до конца сессии (REGRESSION 25.09, test/shim.test.ts).
+user="$HOME/.claude/settings.json"
+if [ -x "$HOME/.claude/harness/bin/hook" ] && [ -f "$user" ] && grep -qE "harness/bin/hook ${1:-}([^a-z-]|\$)" "$user"; then
+  exit 0
+fi
+here="$(cd "$(dirname "$0")/../.." && pwd -P)"
+exec "$here/harness/bin/hook" "$@"

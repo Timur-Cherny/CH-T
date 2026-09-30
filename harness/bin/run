@@ -1,0 +1,44 @@
+#!/bin/sh
+# Запуск скриптов харнесса под ЕГО Node (>= 24), а не под node из PATH проекта:
+#   harness/bin/run scripts/data-answers.ts --classify "…"   # путь как есть или относительно harness/
+#   harness/bin/run --test 'harness/test/**/*.test.ts'       # первый аргумент с «-» уходит node как есть
+# Резолв бинаря общий с bin/hook — bin/node-pin.sh. Коды выхода: 64 — скрипт не указан или не найден,
+# 69 — Node >= 24 нет; отката на node из PATH нет: там .ts падает с ERR_UNKNOWN_FILE_EXTENSION.
+set -u
+self="$0"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+root="$(cd "$(dirname "$self")/.." && pwd -P)"
+state="${CLAUDE_STATE_DIR:-$HOME/.claude/exec-telemetry}"
+
+# shellcheck disable=SC1091
+. "$root/bin/node-pin.sh"
+harness_pin_node
+harness_pin_config
+if [ -z "$node_bin" ]; then
+  echo "harness: Node >= 24 не найден — запусти harness/install.sh или задай CLAUDE_HARNESS_NODE" >&2
+  exit 69
+fi
+if [ $# -lt 1 ]; then
+  echo "использование: harness/bin/run <script.ts | --node-flag …> [args]" >&2
+  exit 64
+fi
+
+export NODE_COMPILE_CACHE="$state/compile-cache" HARNESS_ROOT="$root"
+case "$1" in
+  -*) exec "$node_bin" --disable-warning=ExperimentalWarning "$@" ;;
+esac
+
+script="$1"
+shift
+if [ ! -f "$script" ]; then
+  if [ -f "$root/$script" ]; then
+    script="$root/$script"
+  else
+    echo "harness/bin/run: скрипт не найден: $script (искал как есть и в $root)" >&2
+    exit 64
+  fi
+fi
+exec "$node_bin" --disable-warning=ExperimentalWarning "$script" "$@"

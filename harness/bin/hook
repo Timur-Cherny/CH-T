@@ -1,0 +1,120 @@
+#!/bin/sh
+# Единственная точка входа из settings.json.
+# Пинует Node >= 24 отдельно от рантайма проекта и конфиг площадки чекаута, включает NODE_COMPILE_CACHE,
+# отсекает pre-bash без слов-триггеров, не запуская Node (у агента — наблюдает, не решая), и отвечает за барьер, который не отработал.
+# Гейтов здесь нет. Kill-switch'и читает роутер. Контракт — harness/test/shim.test.ts.
+set -u
+ev="${1:-}"
+self="$0"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+root="$(cd "$(dirname "$self")/.." && pwd -P)"
+state="${CLAUDE_STATE_DIR:-$HOME/.claude/exec-telemetry}"
+
+# Префильтр: поле `if` в settings.json не фильтрует (проба 05.09), поэтому pre-bash приходит на КАЖДЫЙ Bash-вызов.
+# Промах по словам-триггерам — выход за 3 мс без Node. Матч — по копии без кавычек и обратных слэшей: оболочка их
+# снимает, поэтому g''it, gl""ab, ps\ql — тот же git/psql, и раньше проскакивали мимо денилиста перед allowlist-
+# гейтом (P2, 25.09). Копия — надмножество: слова-триггеры кавычек не содержат, снятие символов матч только добавляет
+# (лишний матч = один запуск Node). Список — bin/prefilter.regex = экспорт prefilters.ts; равенство держит
+# meta/prefilter.test.ts. Роутер получает исходный payload, не нормализованный.
+# Payload читается на ВСЕХ pre-*: на них барьер обязан отработать до вызова инструмента, а решение «не отработал»
+# (нет рантайма, гейт упал) зависит от permission_mode из payload — ask там, где человек видит вопрос, deny там,
+# где не видит. mode берётся из payload, а не из CLAUDE_HARNESS_UNKNOWN, поэтому свежая беспилотная сессия закрыта
+# без единой переменной. Извлечение — grep по верхнеуровневому строковому полю (JSON без грамматики, как префильтр).
+mode=""
+case "$ev" in
+  pre-*)
+    payload="$(cat)"
+    mode="$(printf '%s' "$payload" | grep -o '"permission_mode"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' | head -1)"
+    ;;
+esac
+# Агентский pre-bash без слова-триггера не пропускается, а наблюдается: friction снимает дерево до вызова агента, иначе
+# sed -i, here-doc и скрипт агента не оставляют следа (INC-FRICTION-AGENT-WINDOW-PARENT-EDITS). Вердикт, падение и
+# отсутствие рантайма в этом режиме до инструмента не доходят — для самой команды всё как при промахе префильтра.
+observe=""
+if [ "$ev" = "pre-bash" ]; then
+  if ! printf '%s' "$payload" | tr -d '\042\047\134' | grep -qE "$(cat "$root/bin/prefilter.regex")"; then
+    case "$payload" in *'"agent_id"'*) observe=1 ;; *) exit 0 ;; esac
+  fi
+fi
+
+# Барьер не отработал (рантайма нет / гейт упал) — исход по режиму, как в src/emit.ts: беспилотный режим → deny,
+# наблюдаемый → ask; CLAUDE_HARNESS_UNKNOWN перекрывает (note → context, ask/deny — явно). Печатает JSON, rc 0.
+fail_closed() {
+  case "${CLAUDE_HARNESS_UNKNOWN:-}" in
+    note) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}' "$1"; exit 0 ;;
+    ask)  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}' "$1"; exit 0 ;;
+    deny) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}' "$1"; exit 0 ;;
+  esac
+  case "$mode" in
+    auto|bypassPermissions|dontAsk) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}' "$1" ;;
+    *) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}' "$1" ;;
+  esac
+  exit 0
+}
+
+# Резолв Node общий с bin/run — одно определение, bin/node-pin.sh.
+# shellcheck disable=SC1091
+. "$root/bin/node-pin.sh"
+harness_pin_node
+harness_pin_config
+
+# Старт сессии при CLAUDE_HARNESS_AUTO_NODE=1 (блок env в .claude/settings.json репозитория — облачные сессии), где
+# нет Node 24 или тулчейна TypeScript: один раз прогнать install.sh — без Node с --ensure-node (приватная сборка, PATH и
+# nvm не трогаются), с Node — на нём; тулчейн install.sh ставит сам — и перезапустить себя. REGRESSION 29.09: шаг
+# срабатывал только без Node, и облако с Node 24 жило без TypeScript всю сессию. Без сети остаётся прежний сигнал.
+if [ "$ev" = "session-start" ] && [ "${CLAUDE_HARNESS_ENSURED:-}" != 1 ] && [ "${CLAUDE_HARNESS_AUTO_NODE:-}" = 1 ] && { [ -z "$node_bin" ] || ! harness_ts_present; }; then
+  payload="$(cat)"
+  if [ -z "$node_bin" ]; then
+    env -u NODE_OPTIONS sh "$root/install.sh" --ensure-node >/dev/null 2>&1
+  else
+    env -u NODE_OPTIONS sh "$root/install.sh" --node "$node_bin" >/dev/null 2>&1
+  fi
+  printf '%s' "$payload" | CLAUDE_HARNESS_ENSURED=1 sh "$0" "$ev"; exit $?
+fi
+[ -z "$node_bin" ] && [ -n "$observe" ] && exit 0
+if [ -z "$node_bin" ]; then
+  # Рантайма нет = данных нет (I1): на pre-событиях — fail_closed, ask или deny по режиму, не тишина.
+  reason="harness inactive: Node >= 24 не найден — запусти harness/install.sh --ensure-node или задай CLAUDE_HARNESS_NODE"
+  case "$ev" in
+    pre-*) fail_closed "$reason" ;;
+    session-start|stop)
+      marker="$state/markers/runtime-missing-${CLAUDE_HARNESS_SESSION:-any}"
+      if [ ! -f "$marker" ]; then
+        mkdir -p "$state/markers" 2>/dev/null && : > "$marker"
+        printf '{"systemMessage":"%s"}' "$reason"
+      fi ;;
+  esac
+  exit 0
+fi
+
+export NODE_COMPILE_CACHE="$state/compile-cache" HARNESS_ROOT="$root"
+# NODE_OPTIONS из окружения проекта (--require/--import/--experimental-loader) исполнило бы чужой код в процессе
+# барьера — снимаем перед запуском рантайма харнесса. Свои флаги харнесс передаёт явным аргументом.
+unset NODE_OPTIONS
+
+# На pre-* рантайм отвечает 0 (allow/ask/context) или 2 (deny) — это отработавший барьер. Любой другой код (падение
+# на импорте, OOM, сорванный флаг) — барьер НЕ отработал: Claude Code трактует rc вне 0/2 как non_blocking_error и
+# выполняет инструмент. Поэтому pre-* прогоняется с перехватом кода, и падение уходит в fail_closed по режиму.
+if [ -n "$observe" ]; then
+  printf '%s' "$payload" | "$node_bin" --disable-warning=ExperimentalWarning "$root/src/main.ts" "$ev" >/dev/null 2>&1
+  exit 0
+fi
+case "$ev" in
+  pre-*)
+    tmperr="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/harness-hook.$$")"
+    out="$(printf '%s' "$payload" | "$node_bin" --disable-warning=ExperimentalWarning "$root/src/main.ts" "$ev" 2>"$tmperr")"
+    rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+      [ -s "$tmperr" ] && cat "$tmperr" >&2
+      rm -f "$tmperr"
+      printf '%s' "$out"
+      exit "$rc"
+    fi
+    rm -f "$tmperr"
+    fail_closed "harness gate crashed (node rc $rc) — барьер не отработал, поставь рабочий Node 24 (install.sh) или сними гейт его CLAUDE_SKIP_*"
+    ;;
+esac
+exec "$node_bin" --disable-warning=ExperimentalWarning "$root/src/main.ts" "$ev"

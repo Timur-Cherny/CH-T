@@ -1,0 +1,10 @@
+{
+  "name": "wms-pg-mcp",
+  "private": true,
+  "type": "module",
+  "description": "MCP-сервер Postgres «только чтение» для контуров WMS. Барьер read-only держат протокол и Postgres, а не разбор строки запроса.",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "pg": "^8.11.0"
+  }
+}

@@ -1,0 +1,31 @@
+# Параметры контуров для обёрток bin/mcp-*.sh. Скопировать в ~/.claude/env/mcp-infra.sh и заполнить; файл вне git.
+# Пароли сюда не пишутся: Postgres берёт их из ~/.pgpass, YouTrack — из ~/.claude/.secrets/youtrack-token.
+# Не нужен контур — оставить его строки пустыми: обёртка этого контура откажет при старте, остальные не заметят.
+
+# Локальный стенд (port-forward из k8s поднимает mcp-pg-stand.sh)
+PG_STAND_PORT=15432
+PG_STAND_DB=app
+PG_STAND_USER=readonly
+
+# Dev-контур
+PG_DEV_HOST=db.dev.example.com
+PG_DEV_PORT=5432
+PG_DEV_DB=app
+PG_DEV_USER=readonly
+
+# Прод: обёртки mcp-pg-*prod.sh не подключаются через claude-mcp.sh, их зовёт mcp/pg-server/prodq.mjs по явному запросу
+PG_PROD_HOST=
+PG_PROD_PORT=
+PG_PROD_DB=
+PG_PROD_USER=
+PG_DJANGO_PROD_HOST=
+PG_DJANGO_PROD_PORT=
+PG_DJANGO_PROD_DB=
+PG_DJANGO_PROD_USER=
+PG_CONNECTOR_PROD_HOST=
+PG_CONNECTOR_PROD_PORT=
+PG_CONNECTOR_PROD_DB=
+PG_CONNECTOR_PROD_USER=
+
+# YouTrack (только чтение)
+YOUTRACK_URL=https://youtrack.example.com
