@@ -120,23 +120,70 @@ def atomic_write(path, data, mode=0o600):
             os.unlink(tmp)
 
 
-def runtime():
-    candidates = []
-    pin = os.environ.get('CLAUDE_HARNESS_NODE')
-    if pin:
-        candidates.append(Path(pin))
-    candidates.append(Path.home() / '.claude/env/node/bin/node')
-    candidates += sorted((Path.home() / '.nvm/versions/node').glob('v*/bin/node'), reverse=True)
-    if shutil.which('node'):
-        candidates.append(Path(shutil.which('node')))
-    for p in candidates:
+HARNESS_PINS = ('CLAUDE_HARNESS_NODE', 'CLAUDE_HARNESS_TS')
+
+
+def harness_env():
+    """Pins of ~/.claude/env/harness.env, written by harness/install.sh: KEY=VALUE lines. Read, never executed."""
+    out = {}
+    try:
+        text = (Path.home() / '.claude/env/harness.env').read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key, value = key.replace('export ', '', 1).strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+            value = value[1:-1]
+        if key in HARNESS_PINS and value:
+            out[key] = value
+    return out
+
+
+def harness_pins(environ):
+    """CLAUDE_HARNESS_NODE and CLAUDE_HARNESS_TS as harness/bin/node-pin.sh resolves them: the environment outranks the file."""
+    pins = harness_env()
+    pins.update({k: environ[k] for k in HARNESS_PINS if environ.get(k)})
+    return pins
+
+
+def node_version(path):
+    """(major, minor, patch) of a node binary from the v<version> directory it lives in; None for any other layout."""
+    match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', Path(path).parent.parent.name)
+    return tuple(int(x) for x in match.groups()) if match else None
+
+
+def runtime(environ=None):
+    """Node >= 24 in the order of harness/bin/node-pin.sh: the pin (environment, then ~/.claude/env/harness.env) →
+    the numerically highest v24+ under ~/.nvm/versions/node and ~/.claude/env/node (where install.sh --ensure-node puts
+    it, one directory per version) → node >= 24 in PATH. One resolver for the shims and for brain."""
+    environ = os.environ if environ is None else environ
+    pin = harness_pins(environ).get('CLAUDE_HARNESS_NODE')
+    if pin and os.path.isfile(pin) and os.access(pin, os.X_OK):
+        return pin
+    best, best_key = None, None
+    for base in (Path.home() / '.nvm/versions/node', Path.home() / '.claude/env/node'):
+        for cand in base.glob('v*/bin/node'):
+            key = node_version(cand)
+            if key is None or key[0] < 24 or not os.access(cand, os.X_OK):
+                continue
+            if best_key is None or key > best_key:
+                best, best_key = str(cand), key
+    if best:
+        return best
+    in_path = shutil.which('node')
+    if in_path:
         try:
-            version = run([str(p), '--version']).decode().strip()
-            if int(version.lstrip('v').split('.')[0]) >= 24:
-                return str(p)
+            major = run([in_path, '-v']).decode().strip().lstrip('v').split('.')[0]
+            if int(major) >= 24:
+                return in_path
         except (OSError, ValueError, subprocess.CalledProcessError):
             pass
-    raise ValueError('Node >=24 не найден: нужен runtime общего harness (harness/install.sh --ensure-node)')
+    raise ValueError('Node >=24 не найден: ни пина в окружении и ~/.claude/env/harness.env, ни v24+ в ~/.nvm и '
+                     '~/.claude/env/node, ни в PATH — harness/install.sh --ensure-node')
 
 
 # ───────────────────────────── Codex ─────────────────────────────
@@ -583,9 +630,12 @@ def hook_env(environ, node, rt='codex'):
            'BRAIN_MCP_ALLOWED': ','.join(sorted(allowed_mcp())),
            'PATH': str(Path(node).parent) + os.pathsep + environ.get('PATH', '')}
     env['BRAIN_' + rt.upper() + '_STATE_DIR'] = str(state)
-    # Only the library pin: env/harness.env is not executed and does not change the client's policy.
+    # The TypeScript pin of harness.env, as node-pin.sh exports it: without it every TS-AST check answers unknown.
+    ts_pin = harness_pins(environ).get('CLAUDE_HARNESS_TS')
     ts = Path(node).parent.parent / 'lib/node_modules/typescript'
-    if ts.exists() and not env.get('CLAUDE_HARNESS_TS'):
+    if ts_pin:
+        env['CLAUDE_HARNESS_TS'] = ts_pin
+    elif ts.exists():
         env['CLAUDE_HARNESS_TS'] = str(ts)
     # The checkout's site config, by the rule of harness/bin/node-pin.sh: the hook does not pass through the shims.
     home_cfg = Path(environ['HOME'], '.claude', 'harness.config.json') if environ.get('HOME') else None
@@ -623,7 +673,7 @@ def run_adapter(rt, rest, data, environ):
         except (ValueError, AttributeError):
             event = 'PreToolUse'
     try:
-        node = runtime()
+        node = runtime(environ)
         r = subprocess.run([node, '--disable-warning=ExperimentalWarning', str(ROOT / ADAPTERS[rt]), *rest], input=data,
                            capture_output=True, env=hook_env(environ, node, rt), timeout=hook_deadline(rt, event))
     except subprocess.TimeoutExpired:

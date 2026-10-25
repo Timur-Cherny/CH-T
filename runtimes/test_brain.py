@@ -352,5 +352,43 @@ class PortableTest(unittest.TestCase):
         self.assertEqual(set(env), {'PATH', 'PWD'})
 
 
+    def _node(self, path, version='v24.1.0'):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('#!/bin/sh\necho ' + version + '\n')
+        path.chmod(0o755)
+        return path
+
+    def test_runtime_follows_node_pin_order_with_versioned_ensure_node_directory(self):
+        home = self.base / 'home-node'
+        env_dir = home / '.claude/env'
+        older = self._node(env_dir / 'node/v24.9.0/bin/node')
+        newer = self._node(env_dir / 'node/v24.20.1/bin/node')
+        self._node(env_dir / 'node/v22.30.0/bin/node', 'v22.30.0')
+        self._node(env_dir / 'node/latest/bin/node')
+        with patch.object(Path, 'home', return_value=home), patch.object(brain.shutil, 'which', return_value=None):
+            self.assertEqual(brain.runtime({}), str(newer),
+                             'Miss this and the Node of install.sh --ensure-node (one directory per version) is never found')
+            (env_dir / 'harness.env').write_text(f'# pin\nCLAUDE_HARNESS_NODE={older}\nCLAUDE_HARNESS_TS=/ts/lib/typescript.js\n')
+            self.assertEqual(brain.runtime({}), str(older), 'harness.env outranks the directory scan, as in node-pin.sh')
+            self.assertEqual(brain.runtime({'CLAUDE_HARNESS_NODE': str(newer)}), str(newer), 'the environment outranks the file')
+            env = brain.hook_env({'HOME': str(home), 'PATH': '/usr/bin'}, str(older), 'codex')
+            self.assertEqual(env['CLAUDE_HARNESS_TS'], '/ts/lib/typescript.js', 'the TypeScript pin of harness.env reaches the hook')
+            self.assertEqual(brain.hook_env({'HOME': str(home), 'CLAUDE_HARNESS_TS': '/mine.js'}, str(older))['CLAUDE_HARNESS_TS'], '/mine.js')
+            (env_dir / 'harness.env').write_text(f'CLAUDE_HARNESS_NODE={home}/gone/node\n')
+            self.assertEqual(brain.runtime({}), str(newer), 'a pin that is not executable falls through to the scan')
+
+    def test_runtime_takes_node_24_from_path_and_refuses_older(self):
+        home = self.base / 'home-path'
+        home.mkdir()
+        old = self._node(self.base / 'bin-old/node', 'v22.4.0')
+        new = self._node(self.base / 'bin-new/node', 'v24.3.0')
+        with patch.object(Path, 'home', return_value=home):
+            with patch.object(brain.shutil, 'which', return_value=str(new)):
+                self.assertEqual(brain.runtime({}), str(new))
+            with patch.object(brain.shutil, 'which', return_value=str(old)):
+                with self.assertRaisesRegex(ValueError, 'Node >=24 не найден'):
+                    brain.runtime({})
+
+
 if __name__ == '__main__':
     unittest.main()
