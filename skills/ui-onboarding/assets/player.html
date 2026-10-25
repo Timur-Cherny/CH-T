@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Инструкция</title>
+<style>
+:root {
+  --accent: #f5ba2d; --ink: #1d2b28; --text: #34433f; --mut: #6b7874; --brand: #2c7065;
+  --scrim: rgba(10, 20, 40, .55); --paper: #ffffff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #0f1715; overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+#wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+#stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; flex: none;
+  background: radial-gradient(1300px 900px at 50% 30%, #eef3ff 0, #f7f9fb 55%, #eef2f1 100%); }
+
+/* device: phone body or browser window; #view holds the frame and is what zooms */
+#device { position: absolute; }
+#device.phone { border-radius: 52px; background: #15191d; padding: 14px; box-shadow: 0 30px 80px rgba(20,30,60,.35), inset 0 0 0 2px #2b3138; }
+#device.phone #screen { border-radius: 40px; }
+#device.web { border-radius: 14px; background: #e8ecef; padding: 38px 0 0; box-shadow: 0 30px 80px rgba(20,30,60,.28); }
+#device.web::before { content: ''; position: absolute; left: 18px; top: 14px; width: 54px; height: 12px;
+  background: radial-gradient(circle at 6px 6px, #ff5f57 5px, transparent 6px), radial-gradient(circle at 27px 6px, #febc2e 5px, transparent 6px), radial-gradient(circle at 48px 6px, #28c840 5px, transparent 6px); }
+#screen { position: relative; overflow: hidden; background: #fff; }
+#view { position: absolute; left: 0; top: 0; transform-origin: 0 0; transition: transform .5s cubic-bezier(.2,.8,.2,1); }
+.shot { position: absolute; left: 0; top: 0; opacity: 0; transition: opacity .3s ease; }
+.shot.on { opacity: 1; }
+
+#spot { position: absolute; z-index: 30; border-radius: 12px; pointer-events: none; opacity: 0;
+  box-shadow: 0 0 0 3px var(--accent), 0 0 0 9999px var(--scrim);
+  transition: left .45s cubic-bezier(.2,.8,.2,1), top .45s cubic-bezier(.2,.8,.2,1), width .45s cubic-bezier(.2,.8,.2,1), height .45s cubic-bezier(.2,.8,.2,1), opacity .25s; }
+#spot.on { opacity: 1; }
+#spot.pulse { animation: pulse .9s ease-out 1; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 4px var(--accent), 0 0 0 9999px var(--scrim); } 40% { box-shadow: 0 0 0 12px rgba(245,186,45,.55), 0 0 0 9999px var(--scrim); } 100% { box-shadow: 0 0 0 4px var(--accent), 0 0 0 9999px var(--scrim); } }
+
+#wire { position: absolute; inset: 0; z-index: 45; pointer-events: none; opacity: 0; transition: opacity .3s; }
+#wire.on { opacity: 1; }
+#wire line { stroke: var(--accent); stroke-width: 4; stroke-linecap: round; }
+#wire circle { fill: var(--accent); }
+
+#cap { position: absolute; z-index: 50; width: 600px; background: var(--paper); border-radius: 18px; padding: 26px 30px 28px;
+  box-shadow: 0 18px 50px rgba(20,30,60,.22); border-left: 8px solid var(--accent); opacity: 0; transform: translateY(10px);
+  transition: opacity .3s, transform .3s; }
+#cap.on { opacity: 1; transform: none; }
+#cap .n { font-size: 18px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--brand); margin-bottom: 8px; }
+#cap .t { font-size: 46px; font-weight: 800; color: var(--ink); line-height: 1.12; letter-spacing: -.01em; }
+#cap .d { font-size: 32px; line-height: 1.42; color: var(--text); margin-top: 12px; }
+#cap .d:empty { display: none; }
+.code { white-space: nowrap; }
+
+#finger { position: absolute; z-index: 60; width: 50px; height: 50px; margin: -25px 0 0 -25px; border-radius: 50%;
+  background: rgba(255,255,255,.6); border: 3px solid rgba(29,43,40,.6); box-shadow: 0 4px 12px rgba(0,0,0,.25);
+  left: 0; top: 0; opacity: 0; transition: transform .9s cubic-bezier(.45,.05,.25,1), opacity .3s; }
+#finger.cursor { width: 34px; height: 44px; margin: -4px 0 0 -6px; border: 0; border-radius: 0; box-shadow: none; background: none; }
+#finger.cursor::before { content: ''; position: absolute; inset: 0;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 32'><path d='M2 2 L2 26 L8 20 L12 30 L16 28 L12 18 L20 18 Z' fill='white' stroke='black' stroke-width='1.6' stroke-linejoin='round'/></svg>") no-repeat center/contain; }
+#finger.on { opacity: 1; }
+.ripple { position: absolute; z-index: 59; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
+  background: rgba(245,186,45,.7); animation: rip .6s ease-out forwards; }
+@keyframes rip { to { transform: scale(4); opacity: 0; } }
+#chip { position: absolute; z-index: 55; background: #1d2b28; color: #fff; font-size: 26px; font-weight: 600; padding: 12px 20px;
+  border-radius: 14px; display: flex; gap: 12px; align-items: center; box-shadow: 0 12px 30px rgba(0,0,0,.3); white-space: nowrap;
+  opacity: 0; transform: scale(.92); transition: opacity .25s, transform .25s; }
+#chip.on { opacity: 1; transform: none; }
+#chip i { width: 32px; height: 24px; background: repeating-linear-gradient(90deg, #fff 0 2px, transparent 2px 4px, #fff 4px 7px, transparent 7px 9px); }
+
+#chap { position: absolute; left: 56px; top: 40px; z-index: 50; display: inline-flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 700;
+  color: var(--brand); letter-spacing: .05em; text-transform: uppercase; opacity: 0; transition: opacity .4s;
+  background: var(--paper); padding: 8px 18px 8px 8px; border-radius: 30px; box-shadow: 0 6px 20px rgba(20,40,60,.12); }
+#chap.on { opacity: 1; }
+#chap i { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--ink); font-style: normal; display: inline-flex; align-items: center; justify-content: center; }
+#brand { position: absolute; left: 56px; bottom: 40px; z-index: 50; height: 40px; }
+#prog { position: absolute; left: 0; bottom: 0; height: 6px; width: 0; background: var(--accent); z-index: 80; transition: width .6s ease; }
+
+.card { position: absolute; inset: 0; z-index: 70; opacity: 0; transition: opacity .6s; pointer-events: none;
+  background: radial-gradient(1400px 800px at 85% 0%, #e6f1ee 0, #fff 62%); padding: 120px 180px; display: flex; flex-direction: column; justify-content: center; }
+.card.on { opacity: 1; }
+.card .part { display: inline-flex; align-items: center; gap: 14px; font-size: 24px; font-weight: 700; color: var(--brand); letter-spacing: .05em; text-transform: uppercase; margin-bottom: 24px; }
+.card .part i { width: 46px; height: 46px; border-radius: 50%; background: var(--accent); color: var(--ink); font-style: normal; display: inline-flex; align-items: center; justify-content: center; }
+.card h1 { font-size: 78px; line-height: 1.06; margin: 0 0 28px; color: var(--ink); font-weight: 800; letter-spacing: -.02em; }
+.card p { font-size: 34px; line-height: 1.45; color: var(--text); margin: 0; max-width: 1400px; }
+.card ul { list-style: none; margin: 28px 0 0; padding: 0; }
+.card li { font-size: 32px; line-height: 1.35; color: var(--ink); margin: 0 0 24px; padding-left: 62px; position: relative; opacity: 0; transform: translateX(-16px); transition: opacity .45s, transform .45s; }
+.card li.on { opacity: 1; transform: none; }
+.card li::before { content: '✓'; position: absolute; left: 0; top: -2px; width: 42px; height: 42px; border-radius: 10px; background: var(--brand); color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+#hint { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 100; color: #cfe0db; font-size: 13px; background: rgba(0,0,0,.45); padding: 6px 12px; border-radius: 8px; }
+.rec #hint { display: none; }
+/* Still mode (scripts/to-pdf.mjs): a slide is the moment of reading — nothing moves, no finger, ripple or scan badge. */
+.still *, .still *::before, .still *::after { transition: none !important; animation: none !important; }
+.still #hint, .still #finger, .still .ripple, .still #chip { display: none !important; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="stage">
+  <div id="device"><div id="screen"><div id="view"><img class="shot" id="shotA" alt=""><img class="shot" id="shotB" alt=""></div></div></div>
+  <div id="spot"></div>
+  <svg id="wire" width="1920" height="1080"><line id="wl" x1="0" y1="0" x2="0" y2="0"/><circle id="wd" r="8" cx="0" cy="0"/></svg>
+  <div id="finger"></div>
+  <div id="chip"><i></i><span></span></div>
+  <div id="cap"><div class="n"></div><div class="t"></div><div class="d"></div></div>
+  <div id="chap"><i></i><span></span></div>
+  <img id="brand" alt="" hidden>
+  <div class="card" id="card"></div>
+  <div id="prog"></div>
+</div></div>
+<div id="hint">Пробел — пауза · ← → — шаги · F — во весь экран</div>
+<script>
+// Timing and placement are rules, not taste: see references/timing-and-placement.md.
+const RULES = {
+  // Calibrated on viewer feedback: fixed 2.6–4.6 s captions were "too fast",
+  // 12 chars/s with these moves ×1.5 was "a bit slow" — this is the middle (×1/1.5).
+  cps: 18,            // characters read per second while also looking at the screen
+  orientMs: 700,      // eyes find the callout before reading starts
+  bufferMs: 550,      // re-read / glance back at the target
+  minCaptionMs: 2200,
+  spotMs: 450,        // spotlight moves first, the callout appears after it settles
+  frameMs: 300, settleMs: 300,
+  fingerMs: 600, tapMs: 400, scanMs: 1000, typeCharMs: 50,
+  resultMs: 1150,     // the result of an action stays on screen before anything else moves
+  cardMinMs: 2200, listItemMs: 1100, zoomMs: 500,
+  cardFadeMs: 30, cardHideMs: 600, listLeadMs: 1300, summaryHoldMs: 1500, recStartMs: 400,
+  spotPad: 6,         // spotlight ↔ target, canvas px; dense phone screens have ~10 px between controls
+  gap: 40,            // callout ↔ target (web) or callout ↔ device edge (phone), canvas px
+  zoomBelowPx: 70,    // a target smaller than this on canvas is zoomed
+  zoom: 1.6, safe: 48,
+};
+const W = 1920, H = 1080;
+const Q = new URLSearchParams(location.search);
+const REC = Q.has('rec');
+const STILL = Q.has('still') || window.__STILL === true;
+if (REC) document.body.classList.add('rec');
+if (STILL) document.body.classList.add('still');
+const $ = (s) => document.querySelector(s);
+const stage = $('#stage');
+const fit = () => { if (REC) return; const k = Math.min(innerWidth / W, innerHeight / H); stage.style.transform = `scale(${k})`; };
+addEventListener('resize', fit); fit();
+
+const ABORT = Symbol('abort');
+let tok = 0, paused = false, PACE = 1;
+// Counts real elapsed time: every setTimeout tick overshoots, and summing the requested ticks drifts by percents.
+const wait = async (ms, my = tok) => {
+  let left = ms * PACE, last = performance.now();
+  while (left > 0) {
+    if (my !== tok) throw ABORT;
+    await new Promise((r) => setTimeout(r, Math.min(40, left)));
+    const now = performance.now();
+    if (!paused) left -= now - last;
+    last = now;
+  }
+  if (my !== tok) throw ABORT;
+};
+// Codes like ANM-000038 or B-01-01 never break at a hyphen; only text between tags is touched.
+const keepCodes = (html) => html.replace(/(^|>)([^<]*)/g, (m, p, text) => p + text.replace(/[A-Za-z0-9]+(?:[-–][A-Za-z0-9]+)+/g, '<span class="code">$&</span>'));
+const readingMs = (...texts) => {
+  const chars = texts.filter(Boolean).join(' ').replace(/<[^>]+>/g, '').length;
+  return Math.max(RULES.minCaptionMs, RULES.orientMs + (chars * 1000) / RULES.cps + RULES.bufferMs);
+};
+
+let story, base = '', dev = {}, zoomed = null, shotOn = 'A', curFrame = null;
+// atMs is performance.now() of the page: within a few hundred ms of the second in the recorded video.
+const timeline = [], marks = [];
+
+function layoutDevice() {
+  const [fw, fh] = story.frame;
+  const d = $('#device'), s = $('#screen');
+  d.className = story.device;
+  let k, sw, sh, x, y;
+  if (story.device === 'phone') {
+    sh = 960; k = sh / fh; sw = Math.round(fw * k);
+    x = Math.round((W - sw - 28) / 2); y = Math.round((H - sh - 28) / 2);
+    Object.assign(d.style, { left: `${x}px`, top: `${y}px` });
+    dev = { k, x: x + 14, y: y + 14, w: sw, h: sh, outer: { x, y, w: sw + 28, h: sh + 28 } };
+  } else {
+    k = Math.min(1720 / fw, 900 / fh); sw = Math.round(fw * k); sh = Math.round(fh * k);
+    x = Math.round((W - sw) / 2); y = Math.round((H - sh - 38) / 2) + 20;
+    Object.assign(d.style, { left: `${x}px`, top: `${y}px` });
+    dev = { k, x, y: y + 38, w: sw, h: sh, outer: { x, y, w: sw, h: sh + 38 } };
+  }
+  Object.assign(s.style, { width: `${dev.w}px`, height: `${dev.h}px` });
+  for (const img of document.querySelectorAll('.shot')) Object.assign(img.style, { width: `${dev.w}px`, height: `${dev.h}px` });
+  if (story.brand) { const b = $('#brand'); b.src = base + story.brand; b.hidden = false; }
+}
+
+// Frame px → canvas px, honouring the current zoom.
+const toCanvas = ([x, y, w, h]) => {
+  const z = zoomed ? RULES.zoom : 1, ox = zoomed ? zoomed.ox : 0, oy = zoomed ? zoomed.oy : 0;
+  const x0 = dev.x + (x * dev.k - ox) * z, y0 = dev.y + (y * dev.k - oy) * z;
+  const x1 = x0 + w * dev.k * z, y1 = y0 + h * dev.k * z;
+  // What the viewer sees never extends past the screen the frame sits in.
+  const cx0 = Math.max(x0, dev.x), cy0 = Math.max(y0, dev.y), cx1 = Math.min(x1, dev.x + dev.w), cy1 = Math.min(y1, dev.y + dev.h);
+  return { x: cx0, y: cy0, w: Math.max(0, cx1 - cx0), h: Math.max(0, cy1 - cy0) };
+};
+const pointToCanvas = ([x, y]) => { const r = toCanvas([x, y, 0, 0]); return { x: r.x, y: r.y }; };
+
+async function setFrame(name) {
+  if (!name || curFrame === name) return;
+  const next = shotOn === 'A' ? $('#shotB') : $('#shotA');
+  const prev = shotOn === 'A' ? $('#shotA') : $('#shotB');
+  next.src = base + name;
+  try { await next.decode(); } catch (e) {}
+  next.classList.add('on'); prev.classList.remove('on'); shotOn = shotOn === 'A' ? 'B' : 'A'; curFrame = name;
+  await wait(RULES.frameMs + RULES.settleMs);
+}
+
+async function setZoom(target, want) {
+  // Only a small control is zoomed; a full-width row is already readable and would leave the screen.
+  const small = target && Math.min(target[2], target[3]) * dev.k < RULES.zoomBelowPx && Math.max(target[2], target[3]) * dev.k < dev.w * 0.4;
+  const on = want === true || (want !== false && small);
+  if (!on) { if (zoomed) { zoomed = null; $('#view').style.transform = ''; await wait(RULES.zoomMs); } return; }
+  const cx = (target[0] + target[2] / 2) * dev.k, cy = (target[1] + target[3] / 2) * dev.k;
+  const vw = dev.w / RULES.zoom, vh = dev.h / RULES.zoom;
+  const ox = Math.min(Math.max(cx - vw / 2, 0), dev.w - vw), oy = Math.min(Math.max(cy - vh / 2, 0), dev.h - vh);
+  zoomed = { ox, oy };
+  $('#view').style.transform = `scale(${RULES.zoom}) translate(${-ox}px, ${-oy}px)`;
+  await wait(RULES.zoomMs);
+}
+
+let stepPad = null;
+async function spotlight(target) {
+  const s = $('#spot');
+  if (!target) { s.classList.remove('on'); return null; }
+  const r = toCanvas(target), pad = Number.isFinite(stepPad) ? stepPad : RULES.spotPad;
+  Object.assign(s.style, { left: `${r.x - pad}px`, top: `${r.y - pad}px`, width: `${r.w + 2 * pad}px`, height: `${r.h + 2 * pad}px` });
+  s.classList.add('on'); s.classList.remove('pulse'); void s.offsetWidth; s.classList.add('pulse');
+  await wait(RULES.spotMs);
+  return r;
+}
+
+// Callout beside the target: phone → the side of the device nearest the target, at the target's height;
+// web → right, left, below or above the target, the first that fits without covering it.
+let stepSide = null;
+function placeCallout(r) {
+  const c = $('#cap'); const cw = c.offsetWidth, ch = c.offsetHeight, g = RULES.gap, m = RULES.safe;
+  const clampY = (y) => Math.min(Math.max(y, m + 60), H - ch - m);
+  const clampX = (x) => Math.min(Math.max(x, m), W - cw - m);
+  if (!r) return { x: W - cw - 120, y: (H - ch) / 2, side: 'none' };
+  const cy = r.y + r.h / 2;
+  if (story.device === 'phone') {
+    const o = dev.outer, leftSide = stepSide ? stepSide === 'left' : r.x + r.w / 2 < o.x + o.w / 2;
+    return leftSide ? { x: o.x - g - cw, y: clampY(cy - ch / 2), side: 'left' } : { x: o.x + o.w + g, y: clampY(cy - ch / 2), side: 'right' };
+  }
+  const options = [
+    { x: r.x + r.w + g, y: clampY(cy - ch / 2), side: 'right' },
+    { x: r.x - g - cw, y: clampY(cy - ch / 2), side: 'left' },
+    { x: clampX(r.x + r.w / 2 - cw / 2), y: r.y + r.h + g, side: 'below' },
+    { x: clampX(r.x + r.w / 2 - cw / 2), y: r.y - g - ch, side: 'above' },
+  ];
+  const fits = (p) => p.x >= m && p.x + cw <= W - m && p.y >= m && p.y + ch <= H - m && !overlaps(p, cw, ch, r);
+  const wanted = stepSide && options.find((o) => o.side === stepSide);
+  return (wanted && fits(wanted) ? wanted : null) || options.find(fits) || options[0];
+}
+const overlaps = (p, cw, ch, r) => !(p.x + cw <= r.x || r.x + r.w <= p.x || p.y + ch <= r.y || r.y + r.h <= p.y);
+const gapBetween = (a, b) => {
+  const dx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w), 0), dy = Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h), 0);
+  return Math.round(Math.hypot(dx, dy));
+};
+
+async function callout(step, r) {
+  const c = $('#cap'), wire = $('#wire');
+  c.classList.remove('on'); wire.classList.remove('on');
+  c.querySelector('.n').textContent = step.kicker || '';
+  c.querySelector('.t').innerHTML = keepCodes(step.caption.title);
+  c.querySelector('.d').innerHTML = keepCodes(step.caption.body || '');
+  const p = placeCallout(r);
+  Object.assign(c.style, { left: `${p.x}px`, top: `${p.y}px` });
+  const rect = { x: p.x, y: p.y, w: c.offsetWidth, h: c.offsetHeight };
+  if (r) {
+    const ax = p.side === 'left' ? rect.x + rect.w : p.side === 'right' ? rect.x : rect.x + rect.w / 2;
+    const ay = p.side === 'below' ? rect.y : p.side === 'above' ? rect.y + rect.h : Math.min(Math.max(r.y + r.h / 2, rect.y + 30), rect.y + rect.h - 30);
+    const tx = p.side === 'left' ? r.x - 10 : p.side === 'right' ? r.x + r.w + 10 : r.x + r.w / 2;
+    const ty = p.side === 'below' ? r.y + r.h + 10 : p.side === 'above' ? r.y - 10 : r.y + r.h / 2;
+    Object.assign($('#wl'), {}); $('#wl').setAttribute('x1', ax); $('#wl').setAttribute('y1', ay); $('#wl').setAttribute('x2', tx); $('#wl').setAttribute('y2', ty);
+    $('#wd').setAttribute('cx', tx); $('#wd').setAttribute('cy', ty);
+    wire.classList.add('on');
+  }
+  c.classList.add('on');
+  return rect;
+}
+
+async function act(action) {
+  if (!action || action.type === 'none') return;
+  const f = $('#finger');
+  f.classList.toggle('cursor', story.device === 'web');
+  const p = action.at ? pointToCanvas(action.at) : null;
+  if (action.type === 'tap' || action.type === 'click') {
+    f.classList.add('on'); f.style.transitionDuration = `${RULES.fingerMs * PACE}ms`;
+    f.style.transform = `translate(${p.x}px, ${p.y}px)`; await wait(RULES.fingerMs + 80);
+    const rp = document.createElement('div'); rp.className = 'ripple'; rp.style.left = `${p.x}px`; rp.style.top = `${p.y}px`;
+    stage.appendChild(rp); setTimeout(() => rp.remove(), 700); await wait(RULES.tapMs);
+  }
+  if (action.type === 'scan' || action.type === 'type') {
+    const chip = $('#chip');
+    chip.querySelector('i').style.display = action.type === 'scan' ? '' : 'none';
+    chip.querySelector('span').textContent = action.type === 'scan' ? `Скан: ${action.value}` : action.value;
+    const anchor = p || { x: dev.x + dev.w / 2, y: dev.y + dev.h - 120 };
+    // The badge sits on the field itself: above or below it, it covers the label or the next control.
+    Object.assign(chip.style, { left: `${anchor.x - chip.offsetWidth / 2}px`, top: `${anchor.y - chip.offsetHeight / 2}px` });
+    if (action.type === 'type') chip.querySelector('span').textContent = '';
+    chip.classList.add('on');
+    if (action.type === 'type') {
+      for (const ch of action.value) { chip.querySelector('span').textContent += ch; await wait(RULES.typeCharMs); }
+      await wait(500);
+    } else await wait(RULES.scanMs);
+    chip.classList.remove('on'); await wait(250);
+  }
+}
+
+const clearAll = () => { $('#spot').classList.remove('on'); $('#cap').classList.remove('on'); $('#wire').classList.remove('on'); $('#finger').classList.remove('on'); };
+
+// Items of a list are hidden until shown one by one: the card waits only for what is visible.
+async function card(html, items) {
+  const el = $('#card'); el.innerHTML = keepCodes(html); await wait(RULES.cardFadeMs); el.classList.add('on');
+  const visible = [...el.children].filter((c) => c.tagName !== 'UL').map((c) => c.textContent).join(' ');
+  await wait(items ? Math.max(RULES.listLeadMs, readingMs(visible) - RULES.bufferMs) : Math.max(RULES.cardMinMs, readingMs(visible)));
+  if (items) for (const li of el.querySelectorAll('li')) { li.classList.add('on'); await wait(Math.max(RULES.listItemMs, readingMs(li.textContent) - RULES.orientMs)); }
+}
+const hideCard = async () => { $('#card').classList.remove('on'); await wait(RULES.cardHideMs); };
+const mark = async (kind, chapter, show) => {
+  const t = performance.now(); await show();
+  marks.push({ kind, chapter, atMs: Math.round(t), ms: Math.round((performance.now() - t) / PACE) });
+};
+
+// Cards and the chapter chip: one definition for play() and the still mode.
+const introHtml = () => `<div class="part">${story.intro.kicker || ''}</div><h1>${story.intro.title}</h1><p>${story.intro.lead || ''}</p>`;
+const chapterOf = (id) => { const ch = story.chapters.find((c) => c.id === id) || { title: id }; return { ch, n: story.chapters.indexOf(ch) + 1 }; };
+// null: a single chapter under an intro opens without a card of its own.
+const chapterHtml = (id) => {
+  const { ch, n } = chapterOf(id), single = story.chapters.length === 1;
+  if (single && story.intro) return null;
+  const part = single ? 'Задача' : `<i>${n}</i>Часть ${n} из ${story.chapters.length}`;
+  return `<div class="part">${part}</div><h1>${ch.title}</h1><p>${ch.lead || ''}</p>`;
+};
+const chapChip = (id) => { const { ch, n } = chapterOf(id); $('#chap i').textContent = n; $('#chap span').textContent = ch.title; $('#chap').classList.add('on'); };
+const stepCardHtml = (c) => `<div class="part">${c.kicker || ''}</div><h1>${c.title}</h1>${c.lead ? `<p>${c.lead}</p>` : ''}${c.items ? `<ul>${c.items.map((x) => `<li>${x}</li>`).join('')}</ul>` : ''}`;
+const summaryHtml = () => `<div class="part">${story.summary.kicker || 'Памятка'}</div><h1>${story.summary.title}</h1><ul>${story.summary.items.map((x) => `<li>${x}</li>`).join('')}</ul>`;
+
+// What the viewer reads a step over: frame, zoom, spotlight and callout, before the action.
+async function showStep(step) {
+  stepPad = step.pad; stepSide = step.side || null;
+  await setFrame(step.frame);
+  await setZoom(step.target, step.zoom);
+  const r = await spotlight(step.target);
+  const rect = await callout(step, r);
+  return { r, rect };
+}
+
+async function runStep(i) {
+  const step = story.steps[i];
+  const t0 = performance.now();
+  clearAll();
+  // A card step explains without a screen: a scheme, a rule, what happens behind the scenes.
+  if (step.card) {
+    await card(stepCardHtml(step.card), step.card.items);
+    await hideCard();
+    timeline.push({ i, id: step.id || String(i), chapter: step.chapter, device: story.device, card: true, atMs: Math.round(t0), ms: Math.round((performance.now() - t0) / PACE) });
+    return;
+  }
+  const { r, rect } = await showStep(step);
+  const need = readingMs(step.caption.title, step.caption.body) * (step.hold || 1);
+  const shownAt = performance.now();
+  await wait(need);
+  const shownMs = Math.round((performance.now() - shownAt) / PACE);
+  await act(step.action);
+  if (step.result) { $('#cap').classList.remove('on'); $('#wire').classList.remove('on'); $('#spot').classList.remove('on'); await setFrame(step.result); }
+  await wait(RULES.resultMs);
+  timeline.push({
+    i, id: step.id || String(i), chapter: step.chapter, device: story.device,
+    caption: rect, target: r, gap: r ? gapBetween(rect, r) : null, overlap: r ? overlaps(rect, rect.w, rect.h, r) : false,
+    deviceEdgeGap: r && story.device === 'phone' ? Math.round(rect.x > dev.outer.x ? rect.x - (dev.outer.x + dev.outer.w) : dev.outer.x - (rect.x + rect.w)) : null,
+    verticalOffset: r ? Math.round(Math.abs((rect.y + rect.h / 2) - (r.y + r.h / 2))) : null,
+    requiredMs: Math.round(need), shownMs, zoomed: !!zoomed, action: step.action ? step.action.type : 'none',
+    atMs: Math.round(t0), readableAtMs: Math.round(shownAt), ms: Math.round((performance.now() - t0) / PACE),
+  });
+}
+
+async function play(from = 0) {
+  const my = ++tok;
+  try {
+    let chapter = from > 0 ? story.steps[from - 1].chapter : null;
+    if (from === 0 && story.intro) await mark('intro', null, async () => { await card(introHtml()); await hideCard(); });
+    for (let i = from; i < story.steps.length; i++) {
+      if (my !== tok) return;
+      const st = story.steps[i];
+      if (st.chapter !== chapter) {
+        chapter = st.chapter; const html = chapterHtml(chapter);
+        clearAll(); $('#chap').classList.remove('on');
+        if (html) await mark('chapter', chapter, async () => { await card(html); await hideCard(); });
+        chapChip(chapter);
+      }
+      await runStep(i);
+      $('#prog').style.width = `${((i + 1) / story.steps.length) * 100}%`;
+    }
+    clearAll(); $('#chap').classList.remove('on');
+    await mark('summary', null, async () => {
+      if (story.summary) await card(summaryHtml(), story.summary.items);
+      await wait(RULES.summaryHoldMs);
+    });
+    window.__timeline = timeline; window.__marks = marks; window.__done = true;
+  } catch (e) { if (e !== ABORT) { console.error(e); window.__error = String(e && e.stack || e); window.__done = true; } }
+}
+
+// Still mode (scripts/to-pdf.mjs): the same walkthrough as slides, each as the viewer sees it while
+// reading — a step before its action, a card with every item — drawn by the functions play() uses.
+let slides = [];
+function slidePlan() {
+  const out = [];
+  if (story.intro) out.push({ kind: 'intro', label: story.intro.title, at: 0 });
+  let chapter = null, frame = null;
+  story.steps.forEach((st, i) => {
+    if (st.chapter !== chapter) { chapter = st.chapter; if (chapterHtml(chapter)) out.push({ kind: 'chapter', label: chapterOf(chapter).ch.title, chapter, at: i }); }
+    if (st.card) { out.push({ kind: 'card', label: st.card.title, chapter, at: i }); return; }
+    // A step without its own frame is read over what the previous step left on screen.
+    frame = st.frame || frame;
+    out.push({ kind: 'step', label: st.caption.title, chapter, at: i, frame });
+    frame = st.result || frame;
+  });
+  if (story.summary) out.push({ kind: 'summary', label: story.summary.title, at: story.steps.length });
+  return out;
+}
+// What the reader of a slide would miss: the callout over its target, text past the canvas or wider than its box.
+function slideProblems(r, rect) {
+  const out = [], s = stage.getBoundingClientRect(), k = s.width / W;
+  const box = (el) => { const b = el.getBoundingClientRect(); return { x: (b.left - s.left) / k, y: (b.top - s.top) / k, w: b.width / k, h: b.height / k }; };
+  const off = (b) => b.x < -0.5 || b.y < -0.5 || b.x + b.w > W + 0.5 || b.y + b.h > H + 0.5;
+  const wide = (el) => el.scrollWidth > el.clientWidth + 1;
+  if (rect) {
+    if (r && overlaps(rect, rect.w, rect.h, r)) out.push('the callout covers its target');
+    if (off(rect)) out.push('the callout leaves the canvas');
+    for (const el of document.querySelectorAll('#cap .t, #cap .d')) if (wide(el)) out.push(`wider than the callout: «${el.textContent}»`);
+  }
+  if ($('#card').classList.contains('on')) for (const el of document.querySelectorAll('#card .part, #card h1, #card p, #card li')) {
+    if (off(box(el))) out.push(`leaves the canvas: «${el.textContent}»`);
+    else if (wide(el)) out.push(`wider than the card: «${el.textContent}»`);
+  }
+  return out;
+}
+async function show(i) {
+  const s = slides[i], st = story.steps[s.at];
+  clearAll(); $('#card').classList.remove('on'); $('#chap').classList.remove('on');
+  $('#prog').style.width = `${(s.at / story.steps.length) * 100}%`;
+  let r = null, rect = null;
+  if (s.kind === 'intro') await card(introHtml());
+  if (s.kind === 'chapter') await card(chapterHtml(s.chapter));
+  if (s.kind === 'summary') await card(summaryHtml(), story.summary.items);
+  if (s.kind === 'card' || s.kind === 'step') chapChip(s.chapter);
+  if (s.kind === 'card') await card(stepCardHtml(st.card), st.card.items);
+  if (s.kind === 'step') { await setFrame(s.frame); ({ r, rect } = await showStep(st)); }
+  await document.fonts.ready;
+  await Promise.all([...document.images].filter((im) => im.getAttribute('src')).map((im) => im.decode().catch(() => {})));
+  await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+  return { kind: s.kind, label: s.label, step: s.at, caption: rect, target: r, problems: slideProblems(r, rect) };
+}
+
+addEventListener('keydown', (e) => {
+  if (REC || STILL) return;
+  if (e.code === 'Space') { paused = !paused; e.preventDefault(); }
+  if (e.code === 'KeyF') document.documentElement.requestFullscreen?.();
+  const cur = Math.max(0, timeline.length);
+  if (e.code === 'ArrowRight') play(Math.min(story.steps.length - 1, cur + 1));
+  if (e.code === 'ArrowLeft') play(Math.max(0, cur - 1));
+});
+
+(async () => {
+  story = window.__STORY || await (await fetch(Q.get('story'))).json();
+  base = window.__BASE || (Q.get('story') ? Q.get('story').replace(/[^/]*$/, '') : '');
+  PACE = STILL ? 0 : Number(Q.get('pace') || story.pace || 1);
+  document.title = story.title || document.title;
+  layoutDevice();
+  // Frames decode before playback, so a frame change costs its transition and nothing more.
+  const pre = [...new Set(story.steps.flatMap((st) => [st.frame, st.result]).filter(Boolean))].map((f) => { const im = new Image(); im.src = base + f; return im; });
+  window.__preloaded = pre; await Promise.all(pre.map((im) => im.decode().catch(() => {})));
+  if (STILL) { slides = slidePlan(); window.__show = show; window.__slides = slides.map(({ kind, label }) => ({ kind, label })); return; }
+  if (REC) { await new Promise((r) => setTimeout(r, RULES.recStartMs)); }
+  play(0);
+})();
+</script>
+</body>
+</html>

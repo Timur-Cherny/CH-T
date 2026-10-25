@@ -1,0 +1,42 @@
+// {{name}} adapter: the hook events of {{title}} into the shared registry (runtimes/core.ts).
+// Fill in from the client's hook reference, with the date it was checked: config path, event names, stdin schema,
+// tool names and their argument names, the output schema of allow/deny, exit codes, timeout and failure behaviour.
+// A failure on a pre event must be an explicit deny in the client's own schema — never a crash the client may ignore.
+import { readFileSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { BASE_NA, runGates, denyVerdict, verdictText } from './core.ts';
+import type { HarnessEvent, HookPayload, Verdict } from '../harness/src/types.ts';
+
+export const ADAPTER = '{{name}}-adapter';
+export const {{CONST}}_EVENTS: readonly HarnessEvent[] = ['session-start', 'pre-bash', 'pre-write', 'post', 'stop'];
+export const {{CONST}}_NA: Record<string, string> = { ...BASE_NA };
+
+/** The client's payload as the Claude-shaped call the gates know; null — a tool the adapter does not let through. */
+export function toClaude(raw: Record<string, unknown>): { event: HarnessEvent; payload: HookPayload } | null {
+  const cwd = typeof raw.cwd === 'string' && isAbsolute(raw.cwd) ? raw.cwd : null;
+  if (!cwd) return null;
+  const base = { session_id: `{{name}}:${String(raw.session_id ?? '')}`, cwd, hook_event_name: 'PreToolUse' };
+  const tool = String(raw.tool_name ?? '');
+  const input = (raw.tool_input ?? {}) as Record<string, unknown>;
+  if (tool === '<shell tool>' && typeof input.command === 'string') return { event: 'pre-bash', payload: { ...base, tool_name: 'Bash', tool_input: { command: input.command } } as unknown as HookPayload };
+  if (tool === '<write tool>' && typeof input.path === 'string' && typeof input.content === 'string') return { event: 'pre-write', payload: { ...base, tool_name: 'Write', tool_input: { file_path: resolve(cwd, input.path), content: input.content } } as unknown as HookPayload };
+  return null;
+}
+
+export async function handle(event: string, raw: string, env: NodeJS.ProcessEnv): Promise<Verdict> {
+  const p = JSON.parse(raw) as Record<string, unknown>;
+  const call = toClaude(p);
+  if (!call) return denyVerdict(ADAPTER, 'вход не разобран или инструмент не пропускается адаптером');
+  return runGates(call.event, call.payload, env, { na: {{CONST}}_NA, stateDir: env.BRAIN_{{CONST}}_STATE_DIR, adapter: ADAPTER });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const event = process.argv[2] ?? '';
+  try {
+    const v = await handle(event, readFileSync(0, 'utf8'), process.env);
+    process.stdout.write(JSON.stringify(v.kind === 'deny' ? { decision: 'deny', reason: verdictText(v) } : { decision: 'allow' }));
+  } catch {
+    process.stdout.write(JSON.stringify({ decision: 'deny', reason: `${ADAPTER}: проверки не выполнены` }));
+  }
+}

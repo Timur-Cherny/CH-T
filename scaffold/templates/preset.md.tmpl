@@ -1,0 +1,22 @@
+# Пресет {{name}}
+
+{{purpose}}
+
+Пресет — то, что принадлежит площадке, а не ядру: обёртки каналов (MCP), скиллы домена, фрагмент конфига
+`harness.config.json`. Ядро (`harness/`) пресет не меняет: гейты читают его конфиг.
+
+## Состав
+
+| Путь | Что |
+|---|---|
+| `bin/` | обёртки MCP-серверов `mcp-<имя>.sh`; адреса и секреты — вне git |
+| `skills/` | скиллы домена; ставятся симлинком в `~/.claude/skills/` |
+| `harness.config.fragment.json` | поля конфига площадки, которые нужны пресету |
+
+## Установка
+
+```sh
+ln -s "$PWD/presets/{{name}}/bin" ~/.claude/bin          # если обёртки есть
+for s in presets/{{name}}/skills/*/; do ln -s "$PWD/$s" ~/.claude/skills/; done
+# слить harness.config.fragment.json в ~/.claude/harness.config.json руками — поля описаны в harness/src/config.ts
+```

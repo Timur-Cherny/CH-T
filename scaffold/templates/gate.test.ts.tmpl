@@ -1,0 +1,33 @@
+// Молча ломалось: {{failure}}
+// INVARIANT: {{invariant}}
+// Обе стороны обязательны: deny по РАЗНЫМ причинам, silent по разным причинам, unknown — когда доказать нечем;
+// kill-switch проверяется через route(): вердикт silent и ни одной записи в состояние.
+import { describe, it, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
+import { sandbox, bashPayload, onlyGate, HARNESS_ROOT } from '../_env.ts';
+import { decide, NAME, KILL, TRIGGER } from '../../src/gates/{{name}}.ts';
+import { route } from '../../src/main.ts';
+import type { GateContext, HookPayload, Verdict } from '../../src/types.ts';
+
+const sb = sandbox();
+after(() => sb.cleanup());
+const run = (command: string, env: NodeJS.ProcessEnv = {}): Verdict => {
+  const ctx: GateContext = { event: '{{event}}', payload: bashPayload(command) as unknown as HookPayload, env, root: HARNESS_ROOT, stateDir: sb.stateDir, now: Date.now };
+  return decide(ctx);
+};
+
+describe(NAME, () => {
+  it('stays silent on a command that is not its business', () => { assert.equal(run('ls -la').kind, 'silent'); });
+  it('stays silent when the trigger word is only an argument', () => { assert.equal(run(`echo ${TRIGGER}`).kind, 'silent'); });
+  it('does not pass the judged command before the rule is written', () => { assert.equal(run(`${TRIGGER} --help`).kind, 'unknown'); });
+  it.todo('denies <нарушение 1> — первая причина');
+  it.todo('denies <нарушение 2> — другая причина');
+  it.todo('allows <норма> — допустимая форма той же команды');
+  it(`is not invoked at all under ${KILL}=1 and writes nothing`, async () => {
+    const before = readdirSync(sb.stateDir).length;
+    const v = await route('{{event}}', bashPayload(`${TRIGGER} x`) as never, { HOME: sb.home, CLAUDE_STATE_DIR: sb.stateDir, HARNESS_ROOT, ...onlyGate(NAME), [KILL]: '1' });
+    assert.equal(v.kind, 'silent');
+    assert.equal(readdirSync(sb.stateDir).length, before);
+  });
+});

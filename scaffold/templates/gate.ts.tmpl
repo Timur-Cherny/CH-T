@@ -1,0 +1,27 @@
+// {{name}} — {{purpose}}
+// Что молча ломалось без гейта: {{failure}}
+// Вердикты: deny — доказанное нарушение; unknown — доказать безопасность нечем (роутер поднимет до ask или deny);
+// silent — норма. Regex по SQL/TS/JS запрещён: SQL — parsers/sql.ts, команда — parsers/shell.ts, TS — compiler API.
+import { register } from './registry.ts';
+import { tokenize, commands } from '../parsers/shell.ts';
+import type { GateContext, PreToolUsePayload, Verdict } from '../types.ts';
+
+export const NAME = '{{name}}';
+export const KILL = '{{kill}}';
+/** The command this gate judges; any other command is not its business. */
+export const TRIGGER = '{{trigger}}';
+
+const SILENT: Verdict = { kind: 'silent' };
+
+/** Pure function over (payload, env, state): no stdout, no process.exit, no direct child_process. */
+export function decide(ctx: GateContext): Verdict {
+  const input = (ctx.payload as PreToolUsePayload).tool_input;
+  const command = input && typeof input === 'object' ? (input as { command?: unknown }).command : undefined;
+  if (typeof command !== 'string') return { kind: 'unknown', gate: NAME, reason: 'Bash.command отсутствует' };
+  const parse = tokenize(command);
+  const hits = commands(parse).filter((c) => (c.name.split('/').pop() ?? c.name) === TRIGGER);
+  if (!hits.length) return parse.unknown.length && command.includes(TRIGGER) ? { kind: 'unknown', gate: NAME, reason: `команда не разобрана (${parse.unknown.join(', ')})` } : SILENT;
+  return { kind: 'unknown', gate: NAME, reason: `правило для «${TRIGGER}» ещё не написано — scaffold/README.md, шаг 3` };
+}
+
+register({ name: NAME, events: ['{{event}}'], killSwitch: KILL, run: decide });

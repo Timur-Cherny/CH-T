@@ -1,0 +1,82 @@
+[
+  {
+    "query": "implement Reserve(productId, qty) for our inventory service in src/stock/reserve.ts — several workers can call it at the same time and we can't oversell",
+    "should_trigger": true
+  },
+  {
+    "query": "fix this: orders sometimes get marked Completed while a couple of their picking tasks are still open. close logic lives in order-actions.service.ts",
+    "should_trigger": true
+  },
+  {
+    "query": "add a kafka consumer for OrderShipped events that marks the order shipped and decrements stock — heads up, the broker redelivers sometimes",
+    "should_trigger": true
+  },
+  {
+    "query": "build the checkout capture flow: charge the card -> create fulfillment -> send confirmation email; if a later step fails we must not double-charge",
+    "should_trigger": true
+  },
+  {
+    "query": "we're adding store credit — users top up and spend a balance. they must never overdraw or double-spend it",
+    "should_trigger": true
+  },
+  {
+    "query": "two customers can currently book the same seat under load. rework the booking endpoint so that can't happen",
+    "should_trigger": true
+  },
+  {
+    "query": "implement the discount engine: stack multiple coupons on a cart respecting per-user limits and a max-discount cap",
+    "should_trigger": true
+  },
+  {
+    "query": "the on-hand count goes negative when traffic spikes — please fix the decrement path in stock.repository.ts",
+    "should_trigger": true
+  },
+  {
+    "query": "design a state machine for RMA returns: requested -> approved -> received -> refunded, with proper guards between states",
+    "should_trigger": true
+  },
+  {
+    "query": "add idempotent retry to the webhook dispatcher so we never deliver the same event twice",
+    "should_trigger": true
+  },
+  {
+    "query": "rename the variable `usr` to `user` everywhere in the auth module",
+    "should_trigger": false
+  },
+  {
+    "query": "what does `reserved + available = total` actually mean in our stock model?",
+    "should_trigger": false
+  },
+  {
+    "query": "bump the request timeout in config/app.yaml from 30s to 60s",
+    "should_trigger": false
+  },
+  {
+    "query": "throwaway: write me a quick script to count orders with a null courier in dump.csv",
+    "should_trigger": false
+  },
+  {
+    "query": "add a console.log of the payload at the top of the picking handler so I can debug",
+    "should_trigger": false
+  },
+  {
+    "query": "explain how our handover gate decides whether an order is allowed to close",
+    "should_trigger": false
+  },
+  {
+    "query": "fix the typo in this error message: 'Quantites' should be 'Quantities' in errors.ts",
+    "should_trigger": false
+  },
+  {
+    "query": "add a `trackingNumber` string field to the OrderDto and include it in the GET /orders/:id response",
+    "should_trigger": false
+  },
+  {
+    "query": "what's the difference between optimistic and pessimistic locking?",
+    "should_trigger": false
+  },
+  {
+    "query": "update the README to document the new /reserve endpoint we just added",
+    "should_trigger": false
+  }
+]

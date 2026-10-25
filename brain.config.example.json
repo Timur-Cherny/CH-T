@@ -1,0 +1,13 @@
+{
+  "_comment": "Настройки этой машины для bin/brain. Скопируй в brain.config.json рядом (в .gitignore) или в ~/.config/ch-t/brain.json. mcpAllowed — MCP-серверы, которые Codex/Antigravity-исполнитель может звать мимо гейтов (их инструменты гейты не судят: только read-only). envKeep — переменные-учётки, которые исполнитель получает от запускающей оболочки (по умолчанию токены, пароли и ключи срезаются, кроме входа самого клиента). local — локальная модель для brain local.",
+  "mcpAllowed": [],
+  "envKeep": [],
+  "local": {
+    "llm": "http://127.0.0.1:8080/v1",
+    "model": "default_model",
+    "serve": "~/local-llm/serve.sh",
+    "port": 8091,
+    "maxSteps": 40,
+    "context": 24000
+  }
+}
