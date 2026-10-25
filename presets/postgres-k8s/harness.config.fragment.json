@@ -1,0 +1,9 @@
+{
+  "_comment": "Поля harness.config.json для площадки с Postgres в k8s. Слить в ~/.claude/harness.config.json руками; контракт и дефолты — harness/src/config.ts. Значения ниже — пример схемы приложения, замени своими.",
+  "dataBoundary": {
+    "_comment": "configTables — строки этих таблиц прода считаются конфигурацией и читаются; любые другие — бизнес-данные (deny). spotTables — точечный разбор на проде: идентификатор литералом, LIMIT <= 50, колонки явно, без deniedColumns, вывод не в файл.",
+    "configTables": ["countries", "currencies", "languages", "timezones", "migrations", "app_settings", "feature_flags"],
+    "spotTables": ["orders", "order_items", "products"],
+    "deniedColumns": ["user_id", "*_by_id", "contact_id", "email", "phone", "address", "metadata"]
+  }
+}

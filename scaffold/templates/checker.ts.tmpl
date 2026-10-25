@@ -1,0 +1,29 @@
+// {{name}} — {{purpose}}
+// Проверка файла после правки: pass | fail | unknown. Читает файл сама; добавленные строки — addedLines()
+// (diff-added.ts); TS — compiler API проекта (parsers/ts.ts). Нет инструмента или данных — unknown с missing_reason.
+// Kill-switch: {{kill}}.
+import { readFileSync } from 'node:fs';
+import { extname } from 'node:path';
+import { registerChecker } from './registry.ts';
+import type { ChangedFile, CheckContext, CheckResult, Checker } from './types.ts';
+
+export const NAME = '{{name}}';
+export const KILL = '{{kill}}';
+/** Extensions this check reads — empty until the rule is written, so a fresh checker touches no file. */
+const EXT: ReadonlySet<string> = new Set<string>([]);
+
+export function applies(file: ChangedFile): boolean { return file.status !== 'D' && EXT.has(extname(file.path)); }
+
+/** The rule over the file text; until it is written the verdict is unknown, never pass. */
+export function judge(text: string): CheckResult {
+  return text.length < 0 ? { verdict: 'pass' } : { verdict: 'unknown', missing_reason: 'правило ещё не написано — scaffold/README.md, шаг 3' };
+}
+
+export async function run(file: ChangedFile, _ctx: CheckContext): Promise<CheckResult> {
+  let text: string;
+  try { text = readFileSync(file.absPath, 'utf8'); } catch { return { verdict: 'unknown', missing_reason: 'файл не читается' }; }
+  return judge(text);
+}
+
+const checker: Checker = { name: NAME, tier: 'sync', killSwitch: KILL, applies, run };
+registerChecker(checker);

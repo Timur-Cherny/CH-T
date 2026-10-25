@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Локальный агент</title>
+<style>
+:root {
+  --bg: #141416; --surface: #1c1c1f; --line: #2b2b30; --text: #e9e9ec; --mut: #8d8d95;
+  --me: #27272c; --accent: #d49a4f; --ok: #5cb87a; --err: #e06b6b; --warn: #d9b44a; --code: #111113;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif; -webkit-font-smoothing: antialiased; }
+#app { display: flex; flex-direction: column; height: 100%; max-width: 900px; margin: 0 auto; padding: 0 16px; }
+header { display: flex; align-items: center; gap: 12px; padding: 14px 0 10px; flex-wrap: wrap; }
+header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+#model { font-size: 13px; color: var(--mut); flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mut); flex: none; }
+#dot.ok { background: var(--ok); } #dot.err { background: var(--err); }
+button { font: inherit; font-size: 13px; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover { background: var(--surface); }
+#modes { display: flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+#modes button { border: 0; border-radius: 0; padding: 6px 11px; color: var(--mut); }
+#modes button.on { background: var(--me); color: var(--text); }
+#modes button:disabled { opacity: .35; cursor: default; }
+#log { flex: 1; overflow-y: auto; padding: 8px 0 24px; }
+#log, textarea, .msg pre, .tool pre { scrollbar-width: none; }
+#log::-webkit-scrollbar, textarea::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+.msg { margin: 0 0 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.me { background: var(--me); padding: 10px 16px; border-radius: 16px 16px 4px 16px; width: fit-content; margin-left: auto; max-width: 80%; }
+.msg.note { color: var(--mut); font-size: 14px; }
+.msg.err { color: var(--err); font-size: 14px; }
+.msg pre, .tool pre { background: var(--code); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-x: auto; white-space: pre; font-size: 13px; line-height: 1.45; margin: 6px 0 0; }
+.msg code, .tool code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+.msg :not(pre) > code { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+.busy::after { content: ''; display: inline-block; width: 8px; height: 15px; background: var(--accent); margin-left: 4px; vertical-align: text-bottom; animation: blink 1s steps(2) infinite; }
+@keyframes blink { to { opacity: 0; } }
+.empty { color: var(--mut); text-align: center; margin-top: 22vh; font-size: 15px; line-height: 1.7; }
+.step { border-left: 2px solid var(--line); padding: 2px 0 2px 14px; margin: 0 0 14px; }
+.step-h { font-size: 12px; color: var(--mut); margin-bottom: 6px; }
+.thought { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 8px; }
+.tool { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin: 6px 0; }
+.tool > summary { list-style: none; cursor: pointer; padding: 8px 12px; display: flex; gap: 10px; align-items: baseline; }
+.tool > summary::-webkit-details-marker { display: none; }
+.tool .name { font: 12px ui-monospace, Menlo, monospace; color: var(--accent); flex: none; }
+.tool .arg { font: 13px ui-monospace, Menlo, monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.tool .v { font-size: 12px; flex: none; color: var(--mut); }
+.tool .v.ok { color: var(--ok); } .tool .v.deny { color: var(--err); } .tool .v.ask { color: var(--warn); }
+.tool .body { padding: 0 12px 10px; }
+.gate { font-size: 13px; color: var(--mut); white-space: pre-wrap; margin-top: 6px; }
+.gate.deny { color: var(--err); } .gate.ask { color: var(--warn); }
+.askbox { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+.askbox .yes { border-color: var(--ok); color: var(--ok); } .askbox .no { border-color: var(--err); color: var(--err); }
+.harness { font-size: 13px; color: var(--warn); white-space: pre-wrap; margin: 6px 0; }
+.harness.block { border-left: 2px solid var(--warn); padding-left: 8px; }
+.final { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0 0 20px; white-space: pre-wrap; }
+.final.done { border-color: #2e5a3c; } .final.blocked, .final.error { border-color: #6a2f2f; } .final.limit, .final.stopped { border-color: #5b4a22; }
+.final b { display: block; font-size: 13px; color: var(--mut); font-weight: 600; margin-bottom: 4px; }
+footer { padding: 8px 0 16px; position: relative; }
+#menu { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 6px; display: none; box-shadow: 0 12px 30px rgba(0,0,0,.4); }
+#menu.on { display: block; }
+#menu div { display: flex; gap: 14px; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+#menu div.on, #menu div:hover { background: var(--me); }
+#menu code { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); min-width: 120px; }
+#menu span { color: var(--mut); }
+#box { display: flex; align-items: flex-end; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 8px 8px 8px 16px; }
+#box:focus-within { border-color: #44444b; }
+textarea { flex: 1; font: inherit; color: var(--text); background: transparent; border: 0; outline: 0; resize: none; min-height: 28px; max-height: 40vh; padding: 4px 0; }
+textarea::placeholder { color: var(--mut); }
+#send { width: 36px; height: 36px; padding: 0; border-radius: 50%; background: var(--accent); border-color: var(--accent); color: #1a1208; font-weight: 700; flex: none; }
+#send.stop { background: transparent; color: var(--text); border-color: var(--line); }
+#hint { font-size: 12px; color: var(--mut); padding: 8px 16px 0; display: flex; gap: 16px; flex-wrap: wrap; }
+#hint span:last-child { margin-left: auto; }
+@media (max-width: 560px) { #hint span:not(:last-child) { display: none; } .msg.me { max-width: 92%; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span id="dot"></span><h1>Локальный агент</h1><span id="model">проверяю…</span>
+    <div id="modes"><button data-m="auto" title="Модель сама решает: ответ из знаний или действия; вопросов человеку нет — недоказанное отбивается">Авто</button><button data-m="agent" title="Как авто, но на вопрос гейта отвечаешь ты">Агент</button><button data-m="chat" title="Разговор без инструментов">Чат</button></div>
+    <button id="reset">Новый</button>
+  </header>
+  <div id="log"></div>
+  <footer>
+    <div id="menu"></div>
+    <div id="box"><textarea id="input" rows="1" placeholder="Задача или вопрос · / — команды"></textarea><button id="send" title="Отправить">↑</button></div>
+    <div id="hint"><span>⏎ — отправить</span><span>⇧⏎ — новая строка</span><span id="stats"></span></div>
+  </footer>
+</div>
+<script>
+const BRAIN = /*__BRAIN__*/null;
+const PORT = /^\d{2,5}$/.test(new URLSearchParams(location.search).get('port') ?? '') ? new URLSearchParams(location.search).get('port') : '8080';
+const DIRECT = `http://127.0.0.1:${PORT}/v1`;
+const DEFAULT_SYSTEM = 'Ты полезный помощник. Отвечай по-русски, кратко и по делу; код — в блоках ```.';
+const $ = (s) => document.querySelector(s);
+const log = $('#log'), input = $('#input'), send = $('#send'), stats = $('#stats'), menu = $('#menu');
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+let mode = BRAIN ? store.get('mode', 'auto') : 'chat';
+let system = store.get('system', DEFAULT_SYSTEM);
+let chatMsgs = store.get('chat', []);
+let agentEvents = store.get('agent-events', []);
+let busy = null;
+// The token comes in the URL fragment brain local opens; it never reaches the server as part of the page and stays in this tab only.
+const TOKEN = (() => {
+  const fromHash = new URLSearchParams(location.hash.slice(1)).get('token');
+  try { if (fromHash) sessionStorage.setItem('brain-token', fromHash); } catch {}
+  if (fromHash) history.replaceState(null, '', location.pathname + location.search);
+  try { return fromHash || sessionStorage.getItem('brain-token') || ''; } catch { return fromHash || ''; }
+})();
+addEventListener('hashchange', () => { if (location.hash.includes('token=')) location.reload(); });
+const headers = () => (BRAIN ? { 'Content-Type': 'application/json', 'X-Brain-Token': TOKEN } : { 'Content-Type': 'application/json' });
+const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const md = (t) => esc(t)
+  .replace(/```[\w+-]*\n?([\s\S]*?)(```|$)/g, (_, code) => `<pre><code>${code.replace(/\n$/, '')}</code></pre>`)
+  .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+  .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+const scroll = () => { log.scrollTop = log.scrollHeight; };
+function el(tag, cls, html, parent = log) {
+  log.querySelector('.empty')?.remove();
+  const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html;
+  parent.appendChild(e); scroll(); return e;
+}
+const note = (t, cls = 'note') => el('div', `msg ${cls}`, md(t));
+const secs = (ms) => `${(ms / 1000).toFixed(1)} с`;
+const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
+
+const COMMANDS = [
+  { cmd: '/new', hint: 'очистить окно', run: () => reset() },
+  { cmd: '/auto', hint: 'режим «Авто»: модель решает сама, вопросов нет', run: () => setMode('auto') },
+  { cmd: '/agent', hint: 'режим «Агент»: вопросы гейтов — тебе', run: () => setMode('agent') },
+  { cmd: '/chat', hint: 'режим «Чат»: без инструментов', run: () => setMode('chat') },
+  { cmd: '/system', hint: 'подсказка чата: /system <текст>', arg: true, run: (a) => { if (a) { system = a; store.set('system', system); } note(`подсказка чата: ${system}`); } },
+  { cmd: '/status', hint: 'репозиторий, модель, сервер', run: () => status(true) },
+  { cmd: '/help', hint: 'список команд', run: () => note(COMMANDS.map((c) => `${c.cmd} — ${c.hint}`).join('\n')) },
+];
+
+function setMode(m) {
+  if (!BRAIN && m !== 'chat') { note('агентные режимы — через `brain local`: страница должна прийти от агента'); return; }
+  mode = m; store.set('mode', m);
+  for (const b of document.querySelectorAll('#modes button')) b.classList.toggle('on', b.dataset.m === mode);
+  draw();
+}
+for (const b of document.querySelectorAll('#modes button')) {
+  if (!BRAIN && b.dataset.m !== 'chat') b.disabled = true;
+  b.addEventListener('click', () => !busy && setMode(b.dataset.m));
+}
+
+async function status(say) {
+  if (BRAIN && !TOKEN) { $('#model').textContent = 'нет токена — открой ссылку из терминала brain local'; $('#dot').className = 'err'; return; }
+  try {
+    if (BRAIN) {
+      const r = await fetch('/api/status', { headers: headers() });
+      if (r.status === 403) { $('#model').textContent = 'токен не подошёл — открой свежую ссылку из терминала brain local'; $('#dot').className = 'err'; return; }
+      const j = await r.json();
+      $('#model').textContent = `${j.repo.split('/').pop()} · ${j.task} · ${j.model.split('/').pop()}`;
+      $('#dot').className = j.llmOk ? 'ok' : 'err';
+      if (say) note(`репозиторий: ${j.repo}\nзадача brain: ${j.task}\nмодель: ${j.model} @ ${j.llm} — ${j.llmOk ? 'отвечает' : 'не отвечает'}`);
+    } else {
+      const j = await (await fetch(`${DIRECT}/models`)).json();
+      $('#model').textContent = (j.data?.[0]?.id || '').split('/').pop() || 'сервер готов'; $('#dot').className = 'ok';
+    }
+  } catch { $('#model').textContent = 'сервер не отвечает'; $('#dot').className = 'err'; }
+}
+
+// ───── agent timeline: one renderer for live events and for replay after reload ─────
+let cur = null;
+const cards = new Map();
+function argLine(name, a) {
+  if (typeof a !== 'object' || !a) return String(a ?? '');
+  if (name === 'bash') return a.command ?? '';
+  if (name === 'edit_file' || name === 'write_file' || name === 'read_file') return a.path ?? '';
+  if (name === 'list_dir') return a.path ?? '.';
+  return JSON.stringify(a);
+}
+function renderEvent(e, live) {
+  switch (e.type) {
+    case 'user': el('div', 'msg me', md(e.text)); break;
+    case 'start': cur = null; note(`${e.mode === 'agent' ? 'Агент' : 'Авто'} · ${e.repo}`); break;
+    case 'step': cur = el('div', 'step'); cur.head = el('div', 'step-h busy', `шаг ${e.n} · модель думает…`, cur); break;
+    case 'model': if (cur) { cur.head.className = 'step-h'; cur.head.textContent = `шаг ${cur.head.textContent.match(/\d+/)?.[0] ?? ''} · ${secs(e.ms)}` + (e.prompt_tokens ? ` · промпт ${k(e.prompt_tokens)}${e.cached_tokens ? ` (кеш ${k(e.cached_tokens)})` : ''} → ${k(e.completion_tokens ?? 0)}` : ''); }
+      if (e.context) stats.textContent = `контекст ${k(e.context)} / ${k(e.budget)}`; break;
+    case 'context': note(`окно сжато (${e.mode === 'drop' ? 'старые шаги удалены' : 'старый вывод укорочен'}): ≈${k(e.before)} → ≈${k(e.after)} из ${k(e.budget)}`); break;
+    case 'assistant': el('div', 'thought', md(e.text), cur ?? log); break;
+    case 'tool': {
+      const d = el('details', 'tool', `<summary><span class="name">${esc(e.name)}</span><span class="arg">${esc(argLine(e.name, e.args))}</span><span class="v">…</span></summary><div class="body"></div>`, cur ?? log);
+      const body = d.querySelector('.body');
+      if (typeof e.args === 'object' && e.args && (e.name !== 'bash' || String(e.args.command).length > 80 || e.args.timeout_s)) el('pre', '', `<code>${esc(e.name === 'write_file' ? `${e.args.path}\n\n${e.args.content ?? ''}` : e.name === 'edit_file' ? `${e.args.path}\n− ${e.args.old_string ?? ''}\n+ ${e.args.new_string ?? ''}` : JSON.stringify(e.args, null, 2))}</code>`, body);
+      cards.set(e.id, d); break;
+    }
+    case 'gate': {
+      const d = cards.get(e.id); if (!d) break;
+      const v = d.querySelector('.v');
+      const map = { silent: ['✓ гейты', 'ok'], context: ['✓ заметка', 'ok'], deny: ['⛔ отказ', 'deny'], ask: ['? вопрос', 'ask'], unknown: ['? не доказано', 'ask'], block: ['? блок', 'ask'] };
+      const [t, c] = map[e.kind] ?? [e.kind, ''];
+      v.textContent = t; v.className = `v ${c}`;
+      if (e.text) { el('div', `gate ${c}`, esc(e.text), d.querySelector('.body')); if (c !== 'ok') d.open = true; }
+      break;
+    }
+    case 'ask': {
+      const d = cards.get(e.call); const host = d ? d.querySelector('.body') : (cur ?? log);
+      if (d) d.open = true;
+      const box = el('div', 'askbox', `<span>Гейт спрашивает. Выполнить?</span>`, host);
+      if (live) {
+        const answer = async (allow) => { box.innerHTML = allow ? '<span>разрешено</span>' : '<span>отклонено</span>'; await fetch('/api/answer', { method: 'POST', headers: headers(), body: JSON.stringify({ id: e.id, allow }) }).catch(() => {}); };
+        const yes = el('button', 'yes', 'Разрешить', box); const no = el('button', 'no', 'Отклонить', box);
+        yes.onclick = () => answer(true); no.onclick = () => answer(false);
+      }
+      box.dataset.call = e.call; break;
+    }
+    case 'answer': { const b = log.querySelector(`.askbox[data-call="${CSS.escape(e.call)}"]`); if (b) b.innerHTML = `<span>${e.allowed ? 'разрешено' : 'отклонено'}</span>`; break; }
+    case 'result': {
+      const d = cards.get(e.id); if (!d) break;
+      const v = d.querySelector('.v'); if (v.textContent === '…') { v.textContent = e.ok ? '✓' : '✗'; v.className = `v ${e.ok ? 'ok' : 'deny'}`; }
+      if (!e.ok && v.className.includes('ok')) { v.textContent += ' · ошибка'; v.className = 'v deny'; }
+      if (!(String(e.output).startsWith('ОТКАЗ') && d.querySelector('.gate.deny'))) el('pre', '', `<code>${esc(e.output)}</code>`, d.querySelector('.body'));
+      break;
+    }
+    case 'harness': el('div', `harness${e.blocking ? ' block' : ''}`, `харнесс: ${esc(e.text)}`, cur ?? log); break;
+    case 'final': {
+      const title = { done: 'Готово', blocked: 'Харнесс не отпустил', limit: 'Лимит шагов', stopped: 'Остановлено', error: 'Ошибка' }[e.status] ?? e.status;
+      el('div', `final ${e.status}`, `<b>${title} · шагов ${e.steps} · ${secs(e.ms)}</b>${md(e.summary)}`); cur = null; break;
+    }
+    case 'error': note(`ошибка: ${e.message}`, 'err'); break;
+  }
+}
+
+function draw() {
+  log.innerHTML = ''; cards.clear(); cur = null; stats.textContent = '';
+  if (mode === 'chat') {
+    if (!chatMsgs.length) log.innerHTML = `<div class="empty">Разговор с моделью без инструментов.<br>⏎ — отправить · / — команды</div>`;
+    for (const m of chatMsgs) el('div', m.role === 'user' ? 'msg me' : 'msg', md(m.content));
+  } else {
+    if (!agentEvents.length) log.innerHTML = `<div class="empty">${mode === 'auto' ? 'Авто: модель сама решает — ответить из знаний или работать в репозитории.<br>Вопросов тебе нет: недоказанное гейтом отбивается.' : 'Агент: на вопрос гейта отвечаешь ты.'}<br>Каждый шаг, вызов и вердикт гейта — здесь.</div>`;
+    for (const e of agentEvents) renderEvent(e, false);
+  }
+  input.focus();
+}
+
+function setBusy(on) {
+  busy = on; send.textContent = on ? '■' : '↑'; send.className = on ? 'stop' : ''; send.title = on ? 'Остановить' : 'Отправить';
+  for (const b of document.querySelectorAll('#modes button')) b.disabled = on || (!BRAIN && b.dataset.m !== 'chat');
+}
+
+async function runAgent(text) {
+  const push = (e) => { agentEvents.push(e); if (agentEvents.length > 800) agentEvents = agentEvents.slice(-800); renderEvent(e, true); };
+  push({ type: 'user', text });
+  const ctl = new AbortController(); setBusy(ctl);
+  try {
+    const res = await fetch('/api/run', { method: 'POST', headers: headers(), body: JSON.stringify({ prompt: text, mode }), signal: ctl.signal });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const l of lines) if (l.trim()) push(JSON.parse(l));
+    }
+  } catch (e) { if (e.name !== 'AbortError') push({ type: 'error', message: e.message }); }
+  store.set('agent-events', agentEvents.filter((e) => e.type !== 'ask' || true));
+  setBusy(null); input.focus();
+}
+
+async function runChat(text) {
+  chatMsgs.push({ role: 'user', content: text }); el('div', 'msg me', md(text)); store.set('chat', chatMsgs.slice(-200));
+  const out = el('div', 'msg busy', '');
+  const ctl = new AbortController(); setBusy(ctl);
+  let answer = '', chunks = 0, first = 0; const t0 = performance.now();
+  try {
+    const url = BRAIN ? '/api/chat' : `${DIRECT}/chat/completions`;
+    const res = await fetch(url, { method: 'POST', signal: ctl.signal, headers: headers(), body: JSON.stringify({ model: 'default_model', stream: true, max_tokens: 2048, temperature: 0.4, messages: [{ role: 'system', content: system }, ...chatMsgs] }) });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+        const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content; if (!delta) continue;
+        if (!chunks) first = performance.now(); chunks++; answer += delta; out.innerHTML = md(answer); scroll();
+      }
+    }
+  } catch (e) { if (e.name !== 'AbortError') answer += `\n\n[ошибка: ${e.message}]`; }
+  const wait = ((first || performance.now()) - t0) / 1000, gen = (performance.now() - (first || t0)) / 1000;
+  out.className = 'msg'; out.innerHTML = md(answer || '(пусто)');
+  stats.textContent = `первое слово через ${wait.toFixed(1)} с · ≈${Math.round(chunks / Math.max(gen, 0.1))} ток/с`;
+  if (answer) { chatMsgs.push({ role: 'assistant', content: answer }); store.set('chat', chatMsgs.slice(-200)); }
+  setBusy(null); input.focus();
+}
+
+async function stop() {
+  busy?.abort();
+  if (BRAIN && mode !== 'chat') await fetch('/api/stop', { method: 'POST', headers: headers() }).catch(() => {});
+}
+
+let picked = 0;
+const matches = () => { const typed = input.value.split(/\s/)[0]; return input.value.startsWith('/') && !input.value.includes(' ') ? COMMANDS.filter((c) => c.cmd.startsWith(typed)) : []; };
+function drawMenu() {
+  const list = matches(); menu.classList.toggle('on', list.length > 0);
+  picked = Math.min(picked, Math.max(list.length - 1, 0));
+  menu.innerHTML = list.map((c, i) => `<div class="${i === picked ? 'on' : ''}" data-i="${i}"><code>${c.cmd}</code><span>${esc(c.hint)}</span></div>`).join('');
+}
+function pick(i) { const c = matches()[i]; if (!c) return; input.value = c.arg ? `${c.cmd} ` : c.cmd; picked = 0; drawMenu(); grow(); input.focus(); if (!c.arg) ask(); }
+menu.addEventListener('mousedown', (e) => { e.preventDefault(); const d = e.target.closest('div[data-i]'); if (d) pick(Number(d.dataset.i)); });
+
+function ask() {
+  const text = input.value.trim(); if (!text || busy) return;
+  input.value = ''; grow(); drawMenu();
+  if (text.startsWith('/')) { const [cmd, ...rest] = text.split(/\s+/); const c = COMMANDS.find((x) => x.cmd === cmd); if (c) c.run(rest.join(' ').trim()); else note(`нет команды ${cmd}; /help`); return; }
+  if (mode === 'chat') runChat(text); else runAgent(text);
+}
+function reset() { if (busy) return; if (mode === 'chat') { chatMsgs = []; store.set('chat', []); } else { agentEvents = []; store.set('agent-events', []); } draw(); }
+function grow() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, innerHeight * 0.4)}px`; }
+input.addEventListener('input', () => { grow(); picked = 0; drawMenu(); });
+input.addEventListener('keydown', (e) => {
+  const open = menu.classList.contains('on'), n = matches().length;
+  if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); picked = (picked + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; drawMenu(); return; }
+  if (open && (e.key === 'Tab' || e.key === 'Enter')) { e.preventDefault(); pick(picked); return; }
+  if (open && e.key === 'Escape') { menu.classList.remove('on'); return; }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
+});
+input.addEventListener('blur', () => menu.classList.remove('on'));
+send.addEventListener('click', () => (busy ? stop() : ask()));
+$('#reset').addEventListener('click', reset);
+setMode(mode); status(false); setInterval(() => status(false), 15000);
+</script>
+</body>
+</html>

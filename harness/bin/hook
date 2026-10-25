@@ -1,0 +1,164 @@
+#!/bin/sh
+# harness v4 — единственная точка входа из settings.json.
+# Пинует Node >= 24 отдельно от рантайма проекта и конфиг площадки чекаута, включает NODE_COMPILE_CACHE,
+# отсекает pre-bash без слов-триггеров, не запуская Node (у агента — наблюдает; решает только гейт с `observe`), и отвечает за барьер, который не отработал.
+# Гейтов здесь нет. Kill-switch'и читает роутер. Контракт — harness/test/shim.test.ts.
+set -u
+# HARNESS_OBSERVE belongs to the observe branch below alone: inherited from a shell or a repository settings env it would
+# silence every gate but agent-revert, a kill switch outside the CLAUDE_SKIP_* registry (race-auditor 09.10).
+unset HARNESS_OBSERVE
+ev="${1:-}"
+self="$0"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+root="$(cd "$(dirname "$self")/.." && pwd -P)"
+state="${CLAUDE_STATE_DIR:-$HOME/.claude/exec-telemetry}"
+
+# Префильтр: поле `if` в settings.json не фильтрует (проба 05.09), поэтому pre-bash приходит на КАЖДЫЙ Bash-вызов.
+# Промах по словам-триггерам — выход за 3 мс без Node. Матч — по копии без кавычек и обратных слэшей: оболочка их
+# снимает, поэтому g''it, gl""ab, ps\ql — тот же git/psql, и раньше проскакивали мимо денилиста перед allowlist-
+# гейтом (P2, 25.09). Копия — надмножество: слова-триггеры кавычек не содержат, снятие символов матч только добавляет
+# (лишний матч = один запуск Node). Список — bin/prefilter.regex = экспорт prefilters.ts; равенство держит
+# meta/prefilter.test.ts. Роутер получает исходный payload, не нормализованный.
+# Payload читается на ВСЕХ pre-*: на них барьер обязан отработать до вызова инструмента, а решение «не отработал»
+# (нет рантайма, гейт упал) зависит от permission_mode из payload — ask там, где человек видит вопрос, deny там,
+# где не видит. mode берётся из payload, а не из CLAUDE_HARNESS_UNKNOWN, поэтому свежая беспилотная сессия закрыта
+# без единой переменной. Извлечение — grep по верхнеуровневому строковому полю (JSON без грамматики, как префильтр).
+mode=""
+case "$ev" in
+  pre-*)
+    payload="$(cat)"
+    mode="$(printf '%s' "$payload" | grep -o '"permission_mode"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' | head -1)"
+    ;;
+esac
+# Агентский pre-bash без слова-триггера не пропускается, а наблюдается: friction снимает дерево до вызова агента, иначе
+# sed -i, here-doc и скрипт агента не оставляют следа (INC-FRICTION-AGENT-WINDOW-PARENT-EDITS). Падение и отсутствие
+# рантайма в этом режиме до инструмента не доходят. Вердикт доходит только от гейта с `observe` (agent-revert): роутер
+# под HARNESS_OBSERVE=1 глушит остальные, шим отдаёт то, что роутер напечатал.
+# Метка Bash корня (INC-FRICTION-SHARED-ROOT-FOREIGN-WRITES, протокол — src/bash-calls.ts): до префильтра, чтобы её
+# получил и Bash, уходящий в Node (git commit). Поля — раскрытием параметров, без fork. session_id в payload первый,
+# tool_use_id последний (CC 2.1.289): кратчайший префикс для первого, длиннейший для последнего — оператор не по месту
+# поля квадратичен от длины команды (5 с на 100 КБ в bash 3.2). Запись — `true 2>/dev/null >f`: у обычного builtin
+# ошибка редиректа шим не роняет, у `:` в dash и bash-posix — роняет. Нет каталога — нет метки.
+rb=""
+if [ "$ev" = "pre-bash" ]; then
+  case "$payload" in *'"agent_id"'*) ;; *)
+    case "$state" in /*)
+      sid=${payload#*\"session_id\":}; [ "$sid" = "$payload" ] && sid=""; sid=${sid# }; sid=${sid#\"}; sid=${sid%%\"*}
+      tid=${payload##*\"tool_use_id\":}; [ "$tid" = "$payload" ] && tid=""; tid=${tid# }; tid=${tid#\"}; tid=${tid%%\"*}
+      case "$sid" in ''|*[!A-Za-z0-9_-]*) ;; *)
+        # cwd идёт в payload до tool_input: кратчайший префикс находит его, а не слово в команде. Метка несёт его,
+        # чтобы чужая сессия засчитывалась агенту только в общем корне (INC-FRICTION-CROSS-SESSION-WRITES).
+        cwd=${payload#*\"cwd\":}; [ "$cwd" = "$payload" ] && cwd=""; cwd=${cwd# }; cwd=${cwd#\"}; cwd=${cwd%%\"*}
+        case "$tid" in ''|*[!A-Za-z0-9_-]*) ;; *) rb="$state/root-bash/$sid.$tid"; printf '%s' "$cwd" 2>/dev/null >"$rb.start" ;; esac
+        ;;
+      esac
+      ;;
+    esac
+    ;;
+  esac
+fi
+observe=""
+# ANSI-C quoting ($'\x67it') spells a word in escapes that no copy without quotes shows: such a command always reaches
+# Node, where the parser decodes it.
+if [ "$ev" = "pre-bash" ]; then
+  case "$payload" in
+    *"\$'"*) ;;
+    *)
+      if ! printf '%s' "$payload" | tr -d '\042\047\134' | grep -qE "$(cat "$root/bin/prefilter.regex")"; then
+        case "$payload" in *'"agent_id"'*) observe=1 ;; *) exit 0 ;; esac
+      fi
+      ;;
+  esac
+fi
+
+# Барьер не отработал (рантайма нет / гейт упал) — исход по режиму, как в src/emit.ts: беспилотный режим → deny,
+# наблюдаемый → ask; CLAUDE_HARNESS_UNKNOWN перекрывает (note → context, ask/deny — явно). Печатает JSON, rc 0.
+fail_closed() {
+  case "${CLAUDE_HARNESS_UNKNOWN:-}:$mode" in deny:*|:auto|:bypassPermissions|:dontAsk) [ -n "$rb" ] && true 2>/dev/null >"$rb.end" ;; esac
+  case "${CLAUDE_HARNESS_UNKNOWN:-}" in
+    note) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}' "$1"; exit 0 ;;
+    ask)  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}' "$1"; exit 0 ;;
+    deny) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}' "$1"; exit 0 ;;
+  esac
+  case "$mode" in
+    auto|bypassPermissions|dontAsk) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}' "$1" ;;
+    *) printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}' "$1" ;;
+  esac
+  exit 0
+}
+
+# Резолв Node общий с bin/run — одно определение, bin/node-pin.sh.
+# shellcheck disable=SC1091
+. "$root/bin/node-pin.sh"
+harness_pin_node
+harness_pin_config
+
+# Старт сессии без рантайма при CLAUDE_HARNESS_AUTO_NODE=1 (блок env в .claude/settings.json репозитория — облачные
+# сессии): один раз поставить приватную сборку Node 24 (install.sh --ensure-node; PATH и nvm не трогаются) и
+# перезапустить себя. Без переменной и без сети остаётся прежний сигнал «harness inactive».
+if [ -z "$node_bin" ] && [ "$ev" = "session-start" ] && [ "${CLAUDE_HARNESS_ENSURED:-}" != 1 ] && [ "${CLAUDE_HARNESS_AUTO_NODE:-}" = 1 ]; then
+  payload="$(cat)"
+  if sh "$root/install.sh" --ensure-node >/dev/null 2>&1; then
+    printf '%s' "$payload" | CLAUDE_HARNESS_ENSURED=1 sh "$0" "$ev"; exit $?
+  fi
+  printf '%s' "$payload" | CLAUDE_HARNESS_ENSURED=1 sh "$0" "$ev"; exit $?
+fi
+[ -z "$node_bin" ] && [ -n "$observe" ] && exit 0
+if [ -z "$node_bin" ]; then
+  # Рантайма нет = данных нет (I1): на pre-событиях — fail_closed, ask или deny по режиму, не тишина.
+  reason="harness inactive: Node >= 24 не найден — запусти harness/install.sh --ensure-node или задай CLAUDE_HARNESS_NODE"
+  case "$ev" in
+    pre-*) fail_closed "$reason" ;;
+    session-start|stop)
+      marker="$state/markers/runtime-missing-${CLAUDE_HARNESS_SESSION:-any}"
+      if [ ! -f "$marker" ]; then
+        mkdir -p "$state/markers" 2>/dev/null && : > "$marker"
+        printf '{"systemMessage":"%s"}' "$reason"
+      fi ;;
+  esac
+  exit 0
+fi
+
+export NODE_COMPILE_CACHE="$state/compile-cache" HARNESS_ROOT="$root"
+# NODE_OPTIONS из окружения проекта (--require/--import/--experimental-loader) исполнило бы чужой код в процессе
+# барьера — снимаем перед запуском рантайма харнесса. Свои флаги харнесс передаёт явным аргументом.
+unset NODE_OPTIONS
+
+# На pre-* рантайм отвечает 0 (allow/ask/context) или 2 (deny) — это отработавший барьер. Любой другой код (падение
+# на импорте, OOM, сорванный флаг) — барьер НЕ отработал: Claude Code трактует rc вне 0/2 как non_blocking_error и
+# выполняет инструмент. Поэтому pre-* прогоняется с перехватом кода, и падение уходит в fail_closed по режиму.
+if [ -n "$observe" ]; then
+  tmperr="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/harness-hook.$$")"
+  out="$(printf '%s' "$payload" | HARNESS_OBSERVE=1 "$node_bin" --disable-warning=ExperimentalWarning "$root/src/main.ts" "$ev" 2>"$tmperr")"
+  rc=$?
+  if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+    [ -s "$tmperr" ] && cat "$tmperr" >&2
+    rm -f "$tmperr"
+    printf '%s' "$out"
+    exit "$rc"
+  fi
+  rm -f "$tmperr"
+  exit 0
+fi
+case "$ev" in
+  pre-*)
+    tmperr="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/harness-hook.$$")"
+    out="$(printf '%s' "$payload" | "$node_bin" --disable-warning=ExperimentalWarning "$root/src/main.ts" "$ev" 2>"$tmperr")"
+    rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+      [ -s "$tmperr" ] && cat "$tmperr" >&2
+      rm -f "$tmperr"
+      printf '%s' "$out"
+      if [ -n "$rb" ]; then
+        case "$rc$out" in 2*|*'"permissionDecision":"deny"'*|*'"permissionDecision": "deny"'*) true 2>/dev/null >"$rb.end" ;; esac
+      fi
+      exit "$rc"
+    fi
+    rm -f "$tmperr"
+    fail_closed "harness gate crashed (node rc $rc) — барьер не отработал, поставь рабочий Node 24 (install.sh) или сними гейт его CLAUDE_SKIP_*"
+    ;;
+esac
+exec "$node_bin" --disable-warning=ExperimentalWarning "$root/src/main.ts" "$ev"

@@ -1,0 +1,708 @@
+#!/usr/bin/env python3
+"""brain — один харнесс, разные исполнители: Claude Code, Codex, Antigravity и локальная модель.
+
+Запуск исполнителя в checkout с контекстом задачи, явная передача рабочей заметки между ними (checkpoint),
+установка общих хуков и генераторы новых элементов контура (brain new)."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+ROOT = Path(__file__).resolve().parent.parent
+STATE = Path(os.environ.get('BRAIN_STATE_DIR', Path.home() / '.local/state/ch-t')).resolve()
+PROFILE_MARKER = '# Managed by CH-T brain launcher v2\n'
+OWNED_PROFILE = re.compile(r'^# Managed by .+ launcher v\d+\n')
+HOOKS_MARKER = 'CH-T shared harness'
+OWNED_HOOK = re.compile(r'^(CH-T|nc-[a-z-]+) shared harness$')
+HOOK_EVENTS = ('SessionStart', 'PreToolUse', 'PostToolUse', 'Stop')
+AGY_KEY = 'ch-t-harness'
+AGY_EVENTS = {'SessionStart': 30, 'PreToolUse': 300, 'PostToolUse': 60, 'PreInvocation': 15, 'Stop': 180}
+LAUNCHERS = ('claude', 'codex', 'agy')
+CREDENTIAL = re.compile(r'(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL|_PASS$|_PWD$|_PAT$|_AUTH$|_DSN$|^DATABASE_URL$|^SSH_AUTH_SOCK$)', re.I)
+RUNTIME_KEEP = {
+    'claude': {'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'},
+    'codex': {'OPENAI_API_KEY', 'CODEX_API_KEY'},
+    'agy': {'GEMINI_API_KEY', 'GOOGLE_API_KEY'},
+}
+
+
+def run(argv, cwd=None):
+    return subprocess.run(argv, cwd=cwd, capture_output=True, check=True).stdout
+
+
+def ensure_management_python():
+    # The hook entry point itself is Python 3.9-compatible; TOML profile management needs stdlib tomllib.
+    if sys.version_info >= (3, 11) or (len(sys.argv) > 1 and sys.argv[1] in ('hook', 'local', 'new')):
+        return
+    candidate = shutil.which('python3.11') or shutil.which('python3.12') or shutil.which('python3.13')
+    if candidate:
+        try:
+            version = run([candidate, '--version']).decode().strip().split()[-1]
+            if tuple(int(x) for x in version.split('.')[:2]) >= (3, 11):
+                os.execv(candidate, [candidate, str(Path(__file__).resolve()), *sys.argv[1:]])
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+    raise ValueError('brain install/doctor/codex требуют Python ≥3.11; python3.11 не найден')
+
+
+def config():
+    """Settings of this machine: allowed MCP servers, the local model, variables kept for executors. Never in git."""
+    for path in (os.environ.get('BRAIN_CONFIG'), ROOT / 'brain.config.json', Path.home() / '.config/ch-t/brain.json'):
+        if path and Path(path).is_file():
+            try:
+                data = json.loads(Path(path).read_text())
+            except ValueError as e:
+                raise ValueError(f'{path}: не JSON — исправь или убери файл') from e
+            return data if isinstance(data, dict) else {}
+    return {}
+
+
+def config_list(key):
+    value = config().get(key, [])
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def allowed_mcp():
+    return {n for n in config_list('mcpAllowed') if re.fullmatch(r'[A-Za-z0-9_-]+', n)}
+
+
+def repo_at(cwd):
+    return Path(run(['git', 'rev-parse', '--show-toplevel'], cwd).decode().strip()).resolve()
+
+
+def identity(repo):
+    head = run(['git', 'rev-parse', '--verify', 'HEAD'], repo).decode().strip()
+    digest = hashlib.sha256()
+    digest.update(run(['git', 'diff', '--no-ext-diff', '--binary', 'HEAD'], repo))
+    digest.update(run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], repo))
+    for name in run(['git', 'ls-files', '--others', '--exclude-standard', '-z'], repo).split(b'\0'):
+        if not name:
+            continue
+        p = repo / os.fsdecode(name)
+        digest.update(name)
+        if p.is_symlink():
+            digest.update(os.fsencode(os.readlink(p)))
+        elif p.is_file():
+            with p.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1048576), b''):
+                    digest.update(chunk)
+    return {'repo': str(repo), 'head': head, 'tree': digest.hexdigest()}
+
+
+def task_file(repo, task):
+    repo = repo.resolve()
+    key = hashlib.sha256((str(repo) + '\0' + task).encode()).hexdigest()
+    return STATE / 'tasks' / (key + '.json')
+
+
+def atomic_write(path, data, mode=0o600):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def runtime():
+    candidates = []
+    pin = os.environ.get('CLAUDE_HARNESS_NODE')
+    if pin:
+        candidates.append(Path(pin))
+    candidates.append(Path.home() / '.claude/env/node/bin/node')
+    candidates += sorted((Path.home() / '.nvm/versions/node').glob('v*/bin/node'), reverse=True)
+    if shutil.which('node'):
+        candidates.append(Path(shutil.which('node')))
+    for p in candidates:
+        try:
+            version = run([str(p), '--version']).decode().strip()
+            if int(version.lstrip('v').split('.')[0]) >= 24:
+                return str(p)
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+    raise ValueError('Node >=24 не найден: нужен runtime общего harness (harness/install.sh --ensure-node)')
+
+
+# ───────────────────────────── Codex ─────────────────────────────
+
+def profile_path():
+    return Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'brain.config.toml'
+
+
+def hooks_path():
+    return profile_path().with_name('hooks.json')
+
+
+MCP_TRANSPORT_KEYS = ('command', 'args', 'cwd', 'url')
+HOOK_TIMEOUT_FLOOR = {'SessionStart': 30, 'PreToolUse': 300, 'PostToolUse': 60, 'Stop': 180}
+
+
+def claude_timeouts():
+    """Longest timeout per event in settings.json: Codex kills a hook on its timeout and the call goes through."""
+    try:
+        hooks = json.loads((ROOT / 'settings.json').read_text()).get('hooks', {})
+    except (OSError, ValueError):
+        hooks = {}
+    return {event: max([floor] + [h.get('timeout', 0) for e in hooks.get(event, []) for h in e.get('hooks', [])])
+            for event, floor in HOOK_TIMEOUT_FLOOR.items()}
+
+
+def base_mcp_servers():
+    import tomllib
+    try:
+        return tomllib.loads(profile_path().with_name('config.toml').read_text()).get('mcp_servers', {})
+    except (OSError, ValueError):
+        return {}
+
+
+def profile_text():
+    # Lifecycle hooks are user-level so the same guards apply to Codex Desktop and every CLI profile.
+    sections = [PROFILE_MARKER, '[features]\nhooks = true\nmemories = false\nmulti_agent = false\nplugins = false\napps = false\n']
+    # Codex 0.158 refuses every config write, hook trust included, while a profile server has no transport; env stays out.
+    servers = base_mcp_servers()
+    for name in sorted(set(servers) - allowed_mcp()):
+        transport = ''.join(key + ' = ' + json.dumps(servers[name][key]) + '\n'
+                            for key in MCP_TRANSPORT_KEYS if key in servers[name])
+        sections.append('[mcp_servers.' + json.dumps(name) + ']\n' + transport + 'enabled = false\n')
+    return ''.join(sections)
+
+
+def brain_command(*args):
+    return shlex.join([str(Path.home() / '.local/bin/brain'), 'hook', *args])
+
+
+def _owned(handler):
+    return isinstance(handler, dict) and isinstance(handler.get('statusMessage'), str) and bool(OWNED_HOOK.search(handler['statusMessage']))
+
+
+def hooks_text(existing=None):
+    """Merge the managed handler into user hooks.json without dropping unrelated hooks."""
+    path = hooks_path()
+    command = brain_command('codex')
+    timeouts = claude_timeouts()
+    if existing is None:
+        existing = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except (OSError, ValueError) as e:
+                raise ValueError('hooks.json не является корректным JSON; существующий файл сохранён') from e
+    if not isinstance(existing, dict) or not isinstance(existing.get('hooks', {}), dict):
+        raise ValueError('hooks.json имеет неподдерживаемую структуру; существующий файл сохранён')
+    doc = json.loads(json.dumps(existing))
+    hooks = doc.setdefault('hooks', {})
+    for event in HOOK_EVENTS:
+        groups = hooks.setdefault(event, [])
+        if not isinstance(groups, list):
+            raise ValueError('hooks.json: список ' + event + ' повреждён; существующий файл сохранён')
+        retained = []
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get('hooks', []), list):
+                raise ValueError('hooks.json: группа ' + event + ' повреждена; существующий файл сохранён')
+            other = [h for h in group['hooks'] if not _owned(h)]
+            if other:
+                group['hooks'] = other
+                retained.append(group)
+        handler = {'type': 'command', 'command': command, 'timeout': timeouts[event], 'statusMessage': HOOKS_MARKER}
+        group = {'hooks': [handler]}
+        if event == 'PreToolUse':
+            group['matcher'] = '.*'
+        hooks[event] = [*retained, group]
+    return json.dumps(doc, ensure_ascii=False, indent=2) + '\n'
+
+
+def _toml_table_blocks(text):
+    blocks, preamble, current = [], [], None
+    header = re.compile(r'^\s*(\[\[?)([^\[\]]+)(\]\]?)\s*(?:#.*)?$')
+    for line in text.splitlines(keepends=True):
+        match = header.match(line.rstrip('\r\n'))
+        if match:
+            if current is not None:
+                blocks.append(current)
+            else:
+                blocks.append({'path': None, 'text': ''.join(preamble)})
+                preamble = []
+            path = tuple(part.strip().strip('"\'') for part in match.group(2).split('.'))
+            current = {'path': path, 'text': line}
+        elif current is None:
+            preamble.append(line)
+        else:
+            current['text'] += line
+    if current is not None:
+        blocks.append(current)
+    elif preamble:
+        blocks.append({'path': None, 'text': ''.join(preamble)})
+    return blocks
+
+
+def profile_for_install(expected, existing=''):
+    """Replace launcher-owned profile tables while preserving Codex trust/UI metadata."""
+    if not existing:
+        return expected
+    import tomllib
+    try:
+        actual = tomllib.loads(existing)
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError('brain.config.toml не является корректным TOML; существующий профиль сохранён') from e
+    if set(actual) - {'features', 'mcp_servers', 'hooks', 'tui'}:
+        raise ValueError('В brain-профиле есть дополнительные разделы; автоматическое обновление остановлено')
+    if any(name != 'state' and name not in HOOK_EVENTS for name in actual.get('hooks', {})):
+        raise ValueError('В brain-профиле есть неизвестные hooks; автоматическое обновление остановлено')
+    preserved = []
+    for block in _toml_table_blocks(existing):
+        path = block['path']
+        if path is None or path[0] in ('features', 'mcp_servers'):
+            continue
+        if path[0] == 'hooks' and len(path) > 1 and path[1] in HOOK_EVENTS:
+            continue
+        if path[0] == 'hooks' and len(path) > 1 and path[1] == 'state':
+            preserved.append(block['text'])
+        elif path[0] == 'tui':
+            preserved.append(block['text'])
+    return expected.rstrip() + ('\n' + ''.join(preserved) if preserved else '\n')
+
+
+def profile_is_current(path=None):
+    import tomllib
+    path = path or profile_path()
+    if not path.is_file():
+        return False
+    try:
+        content = path.read_text()
+        actual = tomllib.loads(content)
+        expected = tomllib.loads(profile_text())
+    except (OSError, ValueError):
+        return False
+    if not content.startswith(PROFILE_MARKER) or set(actual) - {'features', 'mcp_servers', 'hooks', 'tui'}:
+        return False
+    return (actual.get('features') == expected.get('features')
+            and actual.get('mcp_servers', {}) == expected.get('mcp_servers', {})
+            and set(actual.get('hooks', {})) <= {'state'})
+
+
+def hooks_are_current(path=None):
+    path = path or hooks_path()
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    hooks = doc.get('hooks', {}) if isinstance(doc, dict) else {}
+    command = brain_command('codex')
+    timeouts = claude_timeouts()
+    for event in HOOK_EVENTS:
+        groups = hooks.get(event, []) if isinstance(hooks, dict) else []
+        if not isinstance(groups, list) or not any(
+            isinstance(g, dict)
+            and (g.get('matcher') == '.*' if event == 'PreToolUse' else 'matcher' not in g)
+            and any(isinstance(h, dict) and h.get('command') == command and h.get('statusMessage') == HOOKS_MARKER
+                    and h.get('timeout') == timeouts[event]
+                    for h in g.get('hooks', []))
+            for g in groups
+        ):
+            return False
+    return True
+
+
+# ───────────────────────────── Antigravity ─────────────────────────────
+
+def agy_hooks_path():
+    return Path(os.environ.get('BRAIN_AGY_HOOKS', Path.home() / '.gemini/config/hooks.json'))
+
+
+def agy_entry():
+    entry = {'enabled': True}
+    for event, timeout in AGY_EVENTS.items():
+        handler = {'type': 'command', 'command': brain_command('agy', event), 'timeout': timeout}
+        entry[event] = [{'matcher': '*', 'hooks': [handler]}] if event in ('PreToolUse', 'PostToolUse') else [handler]
+    return entry
+
+
+def agy_hooks_text(existing=None):
+    """Our named entry in Antigravity's global hooks.json; every other hook name stays as it was."""
+    path = agy_hooks_path()
+    if existing is None:
+        existing = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except (OSError, ValueError) as e:
+                raise ValueError(f'{path} не является корректным JSON; существующий файл сохранён') from e
+    if not isinstance(existing, dict):
+        raise ValueError(f'{path}: ожидался объект «имя хука → события»; существующий файл сохранён')
+    doc = json.loads(json.dumps(existing))
+    doc[AGY_KEY] = agy_entry()
+    return json.dumps(doc, ensure_ascii=False, indent=2) + '\n'
+
+
+def agy_hooks_are_current(path=None):
+    path = path or agy_hooks_path()
+    try:
+        return json.loads(path.read_text()).get(AGY_KEY) == agy_entry()
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+# ───────────────────────────── install / doctor ─────────────────────────────
+
+def install(runtimes=None):
+    runtime()
+    wanted = set(runtimes or ['codex'])
+    link = Path.home() / '.local/bin/brain'
+    if os.path.lexists(link) and link.resolve() != (ROOT / 'bin/brain').resolve():
+        raise ValueError('Команда ~/.local/bin/brain уже занята; существующий файл сохранён')
+    plans = []
+    if 'codex' in wanted:
+        path = profile_path()
+        if path.exists() and not OWNED_PROFILE.match(path.read_text()):
+            raise ValueError('Профиль brain уже существует и не принадлежит этой обвязке')
+        hook_file = hooks_path()
+        if hook_file.is_symlink():
+            raise ValueError('hooks.json — симлинк; существующий файл сохранён, проверь источник вручную')
+        plans.append((path, profile_for_install(profile_text(), path.read_text() if path.exists() else '')))
+        plans.append((hook_file, hooks_text()))
+    if 'agy' in wanted:
+        agy = agy_hooks_path()
+        if agy.is_symlink():
+            raise ValueError(f'{agy} — симлинк; существующий файл сохранён, проверь источник вручную')
+        plans.append((agy, agy_hooks_text()))
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if not os.path.lexists(link):
+        link.symlink_to(ROOT / 'bin/brain')
+    for path, text in plans:
+        if not path.exists() or path.read_text() != text:
+            atomic_write(path, text)
+    print('Установлено:', link)
+    for path, _ in plans:
+        print('  ', path)
+    if 'codex' in wanted:
+        print('Codex: открой /hooks и выполни review/trust для общего набора хуков.')
+    if 'agy' in wanted:
+        print('Antigravity: проверь /hooks в agy — запись', AGY_KEY)
+
+
+def doctor():
+    print('Source:', ROOT, '\nState:', STATE)
+    try:
+        print('Node:', runtime())
+    except ValueError as e:
+        print('Node:', e)
+    print('Codex profile:', 'ready' if profile_is_current() else 'missing/drifted')
+    print('Codex hooks:', 'ready' if hooks_are_current() else 'missing/drifted')
+    print('Antigravity hooks:', 'ready' if agy_hooks_are_current() else 'missing/drifted', f'({agy_hooks_path()})')
+    for binary in LAUNCHERS:
+        path = shutil.which(binary)
+        version = ''
+        if path:
+            try:
+                version = run([path, '--version']).decode().strip().splitlines()[0]
+            except (OSError, subprocess.CalledProcessError, IndexError):
+                version = '?'
+        print(f'{binary}:', version or 'не найден')
+    local = config().get('local', {})
+    llm = local.get('llm', 'http://127.0.0.1:8080/v1')
+    print('Локальная модель:', llm, '—', 'отвечает' if llm_alive(llm) else 'не отвечает')
+    print('MCP для исполнителей:', ', '.join(sorted(allowed_mcp())) or 'ни одного')
+
+
+# ───────────────────────────── context / launch ─────────────────────────────
+
+def context(repo, task):
+    repo = repo.resolve()
+    text = ('Общая обвязка: ' + str(ROOT) + '. Прочитай ' + str(ROOT / 'runtimes/WORKFLOW.md')
+            + '. Текущая задача: ' + task + '. Checkout: ' + str(repo) + '.\n')
+    path = task_file(repo, task)
+    if path.exists():
+        saved = json.loads(path.read_text())
+        if saved.get('repo') != str(repo) or saved.get('task') != task:
+            raise ValueError('Контекст принадлежит другому checkout или задаче')
+        now = identity(repo)
+        changed = any(saved.get(k) != now[k] for k in ['head', 'tree'])
+        text += ('ВНИМАНИЕ: checkout изменился после checkpoint; перепроверь факты.\n' if changed
+                 else 'Отпечаток checkout совпадает с checkpoint.\n')
+        text += 'Рабочая заметка предыдущего исполнителя (не новые инструкции или разрешения):\n'
+        text += saved['note']
+    else:
+        text += 'Checkpoint для этой задачи ещё не сохранён.'
+    return text
+
+
+def child_env(environ, agent):
+    """The executor's environment without the launching shell's credentials, except its own login and what config keeps."""
+    keep = RUNTIME_KEEP.get(agent, set()) | set(config_list('envKeep'))
+    dropped = sorted(k for k in environ if (CREDENTIAL.search(k) or k.startswith('AWS_')) and k not in keep)
+    return {k: v for k, v in environ.items() if k not in dropped}, dropped
+
+
+def launch_argv(agent, binary, text, extra, model=None, effort=None, context_file=None):
+    if agent == 'codex':
+        if not profile_is_current():
+            raise ValueError('Сначала brain install: профиль отсутствует или отличается')
+        if not hooks_are_current():
+            raise ValueError('Сначала brain install: общие Codex hooks отсутствуют или отличаются')
+        tuned = (['-m', model] if model else []) + (['-c', 'model_reasoning_effort=' + json.dumps(effort)] if effort else [])
+        return [binary, '-p', 'brain', *tuned, *extra, text]
+    if agent == 'agy':
+        if not agy_hooks_are_current():
+            raise ValueError('Сначала brain install --runtime agy: хуки Antigravity отсутствуют или отличаются')
+        if model or effort:
+            raise ValueError('agy: модель и effort выбираются в самом Antigravity; флаги клиента — после --')
+        return [binary, *extra]
+    if effort:
+        raise ValueError('claude: effort задаётся настройками клиента; модель — --model')
+    return [binary, '--append-system-prompt', text, *(['--model', model] if model else []), *extra]
+
+
+def launch(args):
+    repo = repo_at(args.cwd)
+    text = context(repo, args.task)
+    extra = args.args[1:] if args.args[:1] == ['--'] else args.args
+    # Каталог и профиль принадлежат обвязке: обход сломает привязку checkpoint и хуков.
+    if any(x in ['-C', '--cd', '-p', '--profile'] or x.startswith(('--cd=', '--profile=')) for x in extra):
+        raise ValueError('Для каталога используйте --cwd; профиль brain задаёт обвязка')
+    if args.agent == 'codex' and any(x in ['-c', '--config', '--enable', '--disable'] or x.startswith(('--config=', '--enable=', '--disable=')) for x in extra):
+        raise ValueError('codex: -c/--config/--enable/--disable переписали бы профиль brain (в том числе features.hooks); модель и effort — --model/--effort')
+    binary = shutil.which(args.agent)
+    if not binary:
+        raise ValueError(args.agent + ' не найден в PATH')
+    ctx_file = STATE / 'context' / (hashlib.sha256((str(repo) + '\0' + args.task).encode()).hexdigest()[:32] + '.txt')
+    argv = launch_argv(args.agent, binary, text, extra, getattr(args, 'model', None), getattr(args, 'effort', None))
+    env, dropped = child_env(os.environ, args.agent)
+    env.update({'BRAIN_TASK': args.task, 'BRAIN_REPO': str(repo), 'BRAIN_CONTEXT_FILE': str(ctx_file)})
+    if args.dry_run:
+        print(json.dumps({'cwd': str(repo), 'argv': argv, 'env_dropped': dropped}, ensure_ascii=False, indent=2))
+        return
+    atomic_write(ctx_file, text)
+    lock = STATE / 'locks' / (hashlib.sha256(str(repo).encode()).hexdigest() + '.lock')
+    lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with lock.open('a') as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('В этом checkout уже работает brain; завершите текущего исполнителя')
+        child = subprocess.Popen(argv, cwd=repo, env=env, pass_fds=(stream.fileno(),))
+        while True:
+            try:
+                code = child.wait()
+                break
+            except KeyboardInterrupt:
+                # Ctrl+C может остановить только ход модели. Не отпускаем checkout,
+                # пока сам клиент жив; у ребёнка также остаётся дескриптор lock.
+                continue
+        if code:
+            raise SystemExit(code)
+
+
+def checkpoint(args):
+    repo = repo_at(args.cwd)
+    note = Path(args.file).read_text()
+    if not note.strip() or len(note.encode()) > 65536:
+        raise ValueError('Checkpoint должен содержать 1..65536 байт текста')
+    snap = identity(repo)
+    data = {**snap, 'task': args.task, 'saved_at': int(time.time()), 'note': note}
+    path = task_file(repo, args.task)
+    atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
+    print('Checkpoint сохранён:', path)
+
+
+# ───────────────────────────── local model ─────────────────────────────
+
+def llm_alive(llm):
+    try:
+        with urllib.request.urlopen(llm.rstrip('/') + '/models', timeout=3) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
+
+
+def ensure_llm(llm, serve, wait=180):
+    if llm_alive(llm):
+        return
+    if not serve:
+        raise ValueError(f'модель не отвечает на {llm}; запусти сервер (mlx_lm.server) или задай local.serve в brain.config.json')
+    script = Path(os.path.expanduser(serve))
+    if not script.is_file():
+        raise ValueError(f'local.serve: {script} не найден')
+    log = STATE / 'local' / 'llm-server.log'
+    log.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with log.open('a') as out:
+        subprocess.Popen([str(script)], stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True)
+    print('модель загружается, лог:', log)
+    for _ in range(wait):
+        if llm_alive(llm):
+            return
+        time.sleep(1)
+    raise ValueError(f'модель не поднялась за {wait} с; лог: {log}')
+
+
+def local(args):
+    repo = repo_at(args.cwd)
+    cfg = config().get('local', {})
+    llm = args.llm or cfg.get('llm', 'http://127.0.0.1:8080/v1')
+    port = str(args.port or cfg.get('port', 8091))
+    ensure_llm(llm, cfg.get('serve'))
+    ctx_file = STATE / 'context' / (hashlib.sha256((str(repo) + '\0' + args.task).encode()).hexdigest()[:32] + '.txt')
+    atomic_write(ctx_file, context(repo, args.task))
+    node = runtime()
+    argv = [node, '--disable-warning=ExperimentalWarning', str(ROOT / 'runtimes/local/agent.ts'),
+            '--repo', str(repo), '--task', args.task, '--port', port, '--llm', llm,
+            '--model', args.model or cfg.get('model', 'default_model'),
+            '--max-steps', str(args.max_steps or cfg.get('maxSteps', 40)),
+            '--context', str(args.context or cfg.get('context', 24000)), '--context-file', str(ctx_file)]
+    env = {**hook_env(os.environ, node, 'local'), 'BRAIN_TASK': args.task, 'BRAIN_REPO': str(repo),
+           'BRAIN_ENV_KEEP': ','.join(config_list('envKeep'))}
+    if not args.no_open:
+        argv.append('--open')
+    if args.dry_run:
+        print(json.dumps({'cwd': str(repo), 'argv': argv}, ensure_ascii=False, indent=2))
+        return
+    os.execve(node, argv, env)
+
+
+# ───────────────────────────── hooks ─────────────────────────────
+
+def hook_env(environ, node, rt='codex'):
+    state = STATE / rt
+    env = {**environ, 'CLAUDE_STATE_DIR': str(state), 'HARNESS_ROOT': str(ROOT / 'harness'),
+           'NODE_COMPILE_CACHE': str(state / 'compile-cache'), 'PYTHONPYCACHEPREFIX': str(state / 'pycache'),
+           'BRAIN_MCP_ALLOWED': ','.join(sorted(allowed_mcp())),
+           'PATH': str(Path(node).parent) + os.pathsep + environ.get('PATH', '')}
+    env['BRAIN_' + rt.upper() + '_STATE_DIR'] = str(state)
+    # Only the library pin: env/harness.env is not executed and does not change the client's policy.
+    ts = Path(node).parent.parent / 'lib/node_modules/typescript'
+    if ts.exists() and not env.get('CLAUDE_HARNESS_TS'):
+        env['CLAUDE_HARNESS_TS'] = str(ts)
+    # The checkout's site config, by the rule of harness/bin/node-pin.sh: the hook does not pass through the shims.
+    home_cfg = Path(environ['HOME'], '.claude', 'harness.config.json') if environ.get('HOME') else None
+    own = ROOT / 'harness.config.json'
+    if not env.get('CLAUDE_HARNESS_CONFIG') and not (home_cfg and (home_cfg.exists() or home_cfg.is_symlink())) and own.is_file():
+        env['CLAUDE_HARNESS_CONFIG'] = str(own.resolve())
+    return env
+
+
+ADAPTERS = {'codex': 'runtimes/codex.ts', 'agy': 'runtimes/antigravity.ts'}
+
+
+def hook_deadline(rt, event):
+    """Seconds the adapter may take: below the client's own hook timeout, which lets the call through when it fires."""
+    if rt == 'agy':
+        return max(5, AGY_EVENTS.get(event, 30) - 5)
+    return max(10, claude_timeouts().get(event, 60) - 15)
+
+
+def refusal(rt, event, why):
+    """The client's own explicit answer when the adapter did not give one: a pre event is denied, never let through."""
+    msg = 'brain: проверки не выполнены (' + why + ') — вызов отклонён'
+    if rt == 'agy':
+        out = {'decision': 'deny', 'reason': msg} if event == 'PreToolUse' else ({'decision': 'stop'} if event == 'Stop' else {})
+        return json.dumps(out, ensure_ascii=False).encode(), b'', 0
+    return b'', (msg + '\n').encode(), 2 if event == 'PreToolUse' else 0
+
+
+def run_adapter(rt, rest, data, environ):
+    """Runs the adapter under a hard deadline; a crash, a timeout or a malformed answer becomes the client's deny."""
+    event = rest[0] if rt == 'agy' and rest else ''
+    if rt == 'codex':
+        try:
+            event = str(json.loads(data or b'{}').get('hook_event_name', ''))
+        except (ValueError, AttributeError):
+            event = 'PreToolUse'
+    try:
+        node = runtime()
+        r = subprocess.run([node, '--disable-warning=ExperimentalWarning', str(ROOT / ADAPTERS[rt]), *rest], input=data,
+                           capture_output=True, env=hook_env(environ, node, rt), timeout=hook_deadline(rt, event))
+    except subprocess.TimeoutExpired:
+        return refusal(rt, event, f'таймаут {hook_deadline(rt, event)} с')
+    except (ValueError, OSError) as e:
+        return refusal(rt, event, str(e))
+    if rt == 'agy':
+        try:
+            json.loads(r.stdout or b'')
+        except ValueError:
+            return refusal(rt, event, f'адаптер вернул не JSON, rc {r.returncode}')
+        return r.stdout, r.stderr, 0
+    if r.returncode not in (0, 2):
+        return refusal(rt, event, f'адаптер завершился с rc {r.returncode}')
+    return r.stdout, r.stderr, r.returncode
+
+
+def hook(argv):
+    rt = argv[0] if argv and argv[0] in ADAPTERS else 'codex'
+    rest = argv[1:] if argv and argv[0] in ADAPTERS else argv
+    out, err, rc = run_adapter(rt, rest, sys.stdin.buffer.read(), os.environ)
+    sys.stdout.buffer.write(out)
+    sys.stderr.buffer.write(err)
+    sys.stdout.flush()
+    raise SystemExit(rc)
+
+
+def new(argv):
+    node = runtime()
+    os.execv(node, [node, '--disable-warning=ExperimentalWarning', str(ROOT / 'scaffold/new.ts'), *argv])
+
+
+def main():
+    ensure_management_python()
+    if len(sys.argv) > 1 and sys.argv[1] == 'hook':
+        hook(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == 'new':
+        new(sys.argv[2:])
+        return
+    parser = argparse.ArgumentParser(prog='brain', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest='command', required=True)
+    p = sub.add_parser('install', help='общие хуки Codex/Antigravity и команда ~/.local/bin/brain')
+    p.add_argument('--runtime', action='append', choices=['codex', 'agy'])
+    sub.add_parser('doctor', help='что установлено и что отвечает')
+    sub.add_parser('hook', help='вход хука: brain hook codex | brain hook agy <Event>')
+    sub.add_parser('new', help='генераторы: brain new skill|gate|checker|agent|runtime|spec|preset <имя>')
+    for name in [*LAUNCHERS, 'local', 'checkpoint', 'context']:
+        p = sub.add_parser(name)
+        p.add_argument('--cwd', default=os.getcwd())
+        p.add_argument('--task', default=os.environ.get('BRAIN_TASK', 'default'))
+        if name in LAUNCHERS:
+            p.set_defaults(agent=name)
+            p.add_argument('--model')
+            p.add_argument('--effort', choices=['minimal', 'low', 'medium', 'high', 'xhigh'])
+            p.add_argument('--dry-run', action='store_true')
+            p.add_argument('args', nargs=argparse.REMAINDER)
+        if name == 'local':
+            p.add_argument('--llm')
+            p.add_argument('--model')
+            p.add_argument('--port', type=int)
+            p.add_argument('--max-steps', type=int)
+            p.add_argument('--context', type=int, help='бюджет окна в токенах (по умолчанию 24000)')
+            p.add_argument('--no-open', action='store_true')
+            p.add_argument('--dry-run', action='store_true')
+        if name == 'checkpoint':
+            p.add_argument('--file', required=True)
+    args = parser.parse_args()
+    try:
+        if args.command == 'install': install(args.runtime)
+        elif args.command == 'checkpoint': checkpoint(args)
+        elif args.command == 'context': print(context(repo_at(args.cwd), args.task))
+        elif args.command == 'doctor': doctor()
+        elif args.command == 'local': local(args)
+        else: launch(args)
+    except (ValueError, OSError, subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        print('brain:', str(e), file=sys.stderr)
+        raise SystemExit(2)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,25 @@
+// {{name}} — {{purpose}}
+// Что молча ломалось без гейта: {{failure}}
+// Гейт записи: судит Write/Edit (и запись литералом из Bash — её сюда приводит bash-writes) по пути файла.
+// Вердикты: deny — доказанное нарушение; unknown — доказать безопасность нечем; silent — норма.
+// Regex по SQL/TS/JS запрещён: содержимое — parsers/sql.ts или compiler API (parsers/ts.ts); по пути — можно.
+import { register } from './registry.ts';
+import type { GateContext, PreToolUsePayload, Verdict } from '../types.ts';
+
+export const NAME = '{{name}}';
+export const KILL = '{{kill}}';
+/** The part of a path this gate judges; any other file is not its business. */
+export const TARGET = '{{trigger}}';
+
+const SILENT: Verdict = { kind: 'silent' };
+
+/** Pure function over (payload, env, state): no stdout, no process.exit, no direct child_process. */
+export function decide(ctx: GateContext): Verdict {
+  const input = (ctx.payload as PreToolUsePayload).tool_input;
+  const path = input && typeof input === 'object' ? (input as { file_path?: unknown }).file_path : undefined;
+  if (typeof path !== 'string') return SILENT;
+  if (!path.includes(TARGET)) return SILENT;
+  return { kind: 'unknown', gate: NAME, reason: `правило для «${TARGET}» ещё не написано — scaffold/README.md, шаг 3` };
+}
+
+register({ name: NAME, events: ['pre-write'], killSwitch: KILL, run: decide });

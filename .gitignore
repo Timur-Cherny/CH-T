@@ -1,0 +1,9 @@
+# зависимости MCP-серверов и прочий рантайм
+node_modules/
+.DS_Store
+**/.DS_Store
+# настройки этой машины: адреса, разрешённые MCP, локальная модель — вне git
+brain.config.json
+harness.config.json
+__pycache__/
+*.pyc

@@ -1,0 +1,23 @@
+// INVARIANT: every pre-call of {{title}} is judged by the same gates as Claude's; an unparsed input or an unknown tool
+// is a deny; every registry gate is reached by one of the adapter's events or named N/A with a reason.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { handle, {{CONST}}_EVENTS, {{CONST}}_NA } from './{{name}}.ts';
+import { unreachedGates } from './core.ts';
+
+const env = { ...process.env, BRAIN_{{CONST}}_STATE_DIR: mkdtempSync(join(tmpdir(), 'TEST-{{name}}-')) };
+
+test('every registry gate is reached or named N/A with a reason', () => {
+  assert.deepEqual(unreachedGates({{CONST}}_EVENTS, {{CONST}}_NA), []);
+});
+
+test('an unknown tool and a malformed input are denied', async () => {
+  assert.equal((await handle('PreToolUse', JSON.stringify({ cwd: tmpdir(), tool_name: 'whatever' }), env)).kind, 'deny');
+  await assert.rejects(handle('PreToolUse', '{', env));
+});
+
+test.todo('the client shell tool reaches commit-msg-guard: AI attribution denied, clean message allowed');
+test.todo('the client write tool reaches owner-files: harness/owner/ is denied');

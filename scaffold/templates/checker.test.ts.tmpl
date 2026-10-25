@@ -1,0 +1,15 @@
+// Молча ломалось: {{failure}}
+// INVARIANT: {{invariant}}
+// Временный git-репозиторий: файл с нарушением → fail, без нарушения → pass, без инструмента/данных → unknown.
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { judge, applies, NAME } from '../../src/checks/{{name}}.ts';
+
+describe(NAME, () => {
+  it('touches no file until its extensions are declared', () => {
+    assert.equal(applies({ repo: '/r', path: 'a.ts', absPath: '/r/a.ts', digest: 'x', status: 'M' }), false);
+  });
+  it('is unknown, never pass, until the rule is written', () => { assert.equal(judge('const a = 1;\n').verdict, 'unknown'); });
+  it.todo('fails <нарушение> with a message that names the line');
+  it.todo('passes <норма>');
+});
